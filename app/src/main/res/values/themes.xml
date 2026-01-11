@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.TruckersHub" parent="android:Theme.Material.Light.NoActionBar">
+
+        <item name="android:windowSplashScreenBackground">#0A0A0A</item>
+
+    </style> </resources>
