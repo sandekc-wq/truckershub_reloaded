@@ -57,6 +57,7 @@ dependencies {
     // Holt sich die Versionen automatisch aus der BOM:
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.auth)
+    implementation("com.google.firebase:firebase-firestore")
     implementation(libs.firebase.firestore)
 
     testImplementation(libs.junit)
