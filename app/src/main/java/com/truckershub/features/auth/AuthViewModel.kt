@@ -5,73 +5,111 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.FirebaseAuthUserCollisionException
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 
 class AuthViewModel : ViewModel() {
 
+    // Verbindung zu Firebase (Türsteher & Aktenschrank)
     private val auth: FirebaseAuth = FirebaseAuth.getInstance()
+    private val db: FirebaseFirestore = FirebaseFirestore.getInstance()
 
-    var isLoading by mutableStateOf(false)
+    // --- ZUSTAND (STATE) ---
+    // Hat der Login/Registrierung geklappt?
+    var loginSuccess by mutableStateOf(false)
         private set
 
+    // Gibt es Fehlermeldungen? (z.B. "Passwort zu kurz")
     var errorMessage by mutableStateOf<String?>(null)
         private set
 
-    // HIER IST DAS KEYLESS GO:
-    // Beim Starten wird sofort geprüft: Gibt es schon einen User?
-    // Wenn ja (auth.currentUser != null), ist loginSuccess sofort TRUE.
-    var loginSuccess by mutableStateOf(auth.currentUser != null)
-        private set
+    // Kleiner Check beim App-Start: Ist schon jemand eingeloggt?
+    init {
+        if (auth.currentUser != null) {
+            loginSuccess = true
+        }
+    }
 
-    fun register(email: String, pass: String) {
-        if (email.isBlank() || pass.isBlank()) {
-            errorMessage = "Bitte E-Mail und Passwort ausfüllen."
+    // --- FUNKTIONEN ---
+
+    // 1. REGISTRIEREN (Neu!)
+    fun register(firstName: String, lastName: String, birthDate: String, email: String, pass: String) {
+        // Erstmal aufräumen
+        errorMessage = null
+
+        // Validierung: Haben wir alles?
+        if (firstName.isBlank() || lastName.isBlank() || email.isBlank() || pass.isBlank()) {
+            errorMessage = "Bitte alle Felder ausfüllen."
             return
         }
 
-        isLoading = true
-        errorMessage = null
-
+        // A) Benutzer bei Firebase Auth erstellen (E-Mail & Passwort)
         auth.createUserWithEmailAndPassword(email, pass)
-            .addOnCompleteListener { task ->
-                isLoading = false
-                if (task.isSuccessful) {
-                    loginSuccess = true
-                } else {
-                    val exception = task.exception
-                    errorMessage = if (exception is FirebaseAuthUserCollisionException) {
-                        "Diese E-Mail wird schon verwendet."
-                    } else {
-                        exception?.localizedMessage ?: "Fehler bei der Registrierung."
-                    }
+            .addOnSuccessListener { authResult ->
+                // Benutzer wurde erstellt! Jetzt holen wir uns seine ID.
+                val uid = authResult.user?.uid
+
+                if (uid != null) {
+                    // B) Benutzerdaten in Firestore speichern (Die Personalakte)
+                    val userProfile = hashMapOf(
+                        "firstName" to firstName,
+                        "lastName" to lastName,
+                        "birthDate" to birthDate,
+                        "email" to email,
+                        "role" to "trucker", // Standard-Rolle
+                        "created_at" to System.currentTimeMillis()
+                    )
+
+                    db.collection("users").document(uid)
+                        .set(userProfile, SetOptions.merge())
+                        .addOnSuccessListener {
+                            // Alles erledigt: Tür auf!
+                            loginSuccess = true
+                        }
+                        .addOnFailureListener { e ->
+                            errorMessage = "Profil konnte nicht gespeichert werden: ${e.localizedMessage}"
+                        }
                 }
+            }
+            .addOnFailureListener { e ->
+                // Fehler beim Erstellen (z.B. E-Mail schon vergeben)
+                errorMessage = e.localizedMessage ?: "Registrierung fehlgeschlagen."
             }
     }
 
+    // 2. EINLOGGEN (Klassisch)
     fun login(email: String, pass: String) {
+        errorMessage = null
+
         if (email.isBlank() || pass.isBlank()) {
-            errorMessage = "Bitte E-Mail und Passwort ausfüllen."
+            errorMessage = "Bitte E-Mail und Passwort eingeben."
             return
         }
-
-        isLoading = true
-        errorMessage = null
 
         auth.signInWithEmailAndPassword(email, pass)
-            .addOnCompleteListener { task ->
-                isLoading = false
-                if (task.isSuccessful) {
-                    loginSuccess = true
-                } else {
-                    errorMessage = task.exception?.localizedMessage ?: "Login fehlgeschlagen."
-                }
+            .addOnSuccessListener {
+                loginSuccess = true
+            }
+            .addOnFailureListener { e ->
+                errorMessage = "Login fehlgeschlagen: ${e.localizedMessage}"
             }
     }
 
+    // 3. LOGOUT
     fun logout() {
         auth.signOut()
         loginSuccess = false
-        isLoading = false
         errorMessage = null
+    }
+
+    // --- PLATZHALTER (Damit der Code nicht rot wird) ---
+    fun loginWithGoogle() {
+        // TODO: Google Sign-In Logik hier einbauen
+        errorMessage = "Google Login kommt bald!"
+    }
+
+    fun loginWithFacebook() {
+        // TODO: Facebook Login Logik hier einbauen
+        errorMessage = "Facebook Login kommt bald!"
     }
 }

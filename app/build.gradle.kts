@@ -51,6 +51,10 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+
+    // NEU: Die Bibliothek für erweiterte Icons (z.B. Passwort-Auge)
+    implementation(libs.androidx.compose.material.icons.extended)
+
     implementation(libs.osmdroid.android)
 
     // --- FIREBASE (Unser Funkverkehr) ---
