@@ -71,4 +71,8 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+    // Für Bilder laden
+    implementation("io.coil-kt:coil-compose:2.4.0")
+    // Für den Upload zum Server
+    implementation("com.squareup.okhttp3:okhttp:4.11.0")
 }

@@ -38,40 +38,37 @@ class MainActivity : ComponentActivity() {
                     } else {
                         // 2. Sind wir NICHT eingeloggt...
                         if (showRegisterScreen) {
-                            // ... und wollen uns registrieren? -> Zeige Registrierung
+                            // ... und wollen uns registrieren? -> Zeige Registrierungs-Screen
                             ThubRegisterScreen(
                                 onRegisterClick = { vorname, nachname, geb, email, pass ->
-                                    // HIER RUFEN WIR JETZT DIE REGISTRIERUNG AUF:
+                                    // Wir übergeben jetzt alle 5 Werte an das ViewModel
                                     authViewModel.register(vorname, nachname, geb, email, pass)
                                 },
-                                onBackClick = {
-                                    // Zurück zum Login
+                                onGoogleClick = { /* TODO: Google Logik später */ },
+                                onFacebookClick = { /* TODO: Facebook Logik später */ },
+                                onLoginClick = {
+                                    // Der User hat schon ein Konto -> Zurück zum Login
                                     showRegisterScreen = false
                                 }
                             )
                         } else {
-                            // ... sonst zeigen wir den normalen Login
+                            // ... sonst zeigen wir den normalen LOGIN-SCREEN
+                            // (Hier war vorher der Fehler, da stand der falsche Screen)
                             ThubLoginScreen(
-                                onLoginClick = { email, pass ->
-                                    authViewModel.login(email, pass)
-                                },
-                                onGoogleClick = {
-                                    authViewModel.loginWithGoogle()
-                                },
-                                onFacebookClick = {
-                                    authViewModel.loginWithFacebook()
+                                onLoginClick = { email, password ->
+                                    authViewModel.login(email, password)
                                 },
                                 onRegisterClick = {
-                                    // Weiche stellen: Auf zur Registrierung!
+                                    // Der User will ein neues Konto -> Schalter umlegen
                                     showRegisterScreen = true
                                 },
-                                errorMessage = authViewModel.errorMessage
+                                onGoogleClick = { /* TODO: Google Logik später */ },
+                                onFacebookClick = { /* TODO: Facebook Logik später */ }
                             )
                         }
                     }
                 }
             }
-
         }
     }
 }
