@@ -1,0 +1,24 @@
+---
+files:
+- path: "app/src/main/java/com/truckershub/features/home/OsmMap.kt"
+  readOnly: false
+- path: "app/src/main/java/com/truckershub/features/navigation/components/RoutePlanningPanel.kt"
+  readOnly: false
+- path: "app/src/main/java/com/truckershub/features/parking/components/ParkingRatingDialog.kt"
+  readOnly: false
+- path: "app/src/main/java/com/truckershub/features/parking/ParkingViewModel.kt"
+  readOnly: false
+- path: "app/src/main/java/com/truckershub/core/data/repository/ParkingRepository.kt"
+  readOnly: false
+- path: "app/src/main/java/com/truckershub/features/parking/ParkingDetailScreen.kt"
+  readOnly: false
+- path: "app/src/main/java/com/truckershub/core/data/local/TruckersHubDatabase.kt"
+  readOnly: false
+- path: "app/src/main/java/com/truckershub/core/data/network/GraphHopperClient.kt"
+  readOnly: false
+- path: "app/src/main/java/com/truckershub/core/data/repository/RouteRepository.kt"
+  readOnly: false
+- path: "app/src/main/java/com/truckershub/features/navigation/RouteScreen.kt"
+  readOnly: false
+- path: "app/src/main/java/com/truckershub/core/data/model/ParkingSpot.kt"
+  readOnly: false
