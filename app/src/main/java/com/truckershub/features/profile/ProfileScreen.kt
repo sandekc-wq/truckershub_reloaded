@@ -39,21 +39,33 @@ import com.truckershub.R
 import com.truckershub.core.design.TextWhite
 import com.truckershub.core.design.ThubDarkGray
 import com.truckershub.core.design.ThubNeonBlue
+import com.truckershub.core.network.SecureHttpClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+// --- HELPER FUNKTIONEN ---
+
+/**
+ * Formatiert Timestamp zu lesbares Datum
+ */
+private fun formatDate(timestamp: Long): String {
+    return if (timestamp > 0) {
+        val sdf = SimpleDateFormat("MMM yyyy", Locale.GERMAN)
+        sdf.format(Date(timestamp))
+    } else {
+        "Unbekannt"
+    }
+}
 
 // --- CONFIG ---
 private const val UPLOAD_URL = "https://inetfacts.de/thub_api/upload_thub.php"
@@ -61,6 +73,7 @@ private const val SECRET_KEY = "LKW_V8_POWER"
 
 // --- DATENMODELL ---
 data class UserProfile(
+    // Basis-Informationen
     val firstName: String = "",
     val lastName: String = "",
     val birthDate: String = "",
@@ -71,31 +84,39 @@ data class UserProfile(
     val bio: String = "",
     val status: String = "Fahrbereit",
     val profileImageUrl: String = "",
+
+    // Fahrzeug-Daten
     val truckLength: String = "",
-    val truckType: String = ""
+    val truckType: String = "",
+
+    // Standort & Einstellungen (NEU!)
+    val shareLocation: Boolean = false,        // Standort freigeben?
+    val language: String = "de",               // "de" oder "en"
+    val darkMode: Boolean = false,             // Dunkler Modus
+    val notificationsEnabled: Boolean = true,  // Benachrichtigungen
+
+    // Statistiken (NEU!)
+    val totalParkings: Int = 0,                // Wie oft geparkt
+    val totalRatings: Int = 0,                 // Wie viele Bewertungen
+    val totalFriends: Int = 0,                 // Freunde-Anzahl
+    val ampelUpdates: Int = 0,                 // Ampel-Updates gemacht
+
+    // Online-Status (NEU!)
+    val isOnline: Boolean = false,
+    val lastSeen: Long = 0L,                   // Letzter Login
+    val createdAt: Long = 0L                   // Registrierungsdatum
+)
+
+// Standort-Informationen (für Firebase)
+data class UserLocation(
+    val latitude: Double = 0.0,
+    val longitude: Double = 0.0,
+    val timestamp: Long = System.currentTimeMillis()
 )
 
 // ================================================================
-// WERKZEUGKISTE (JETZT OBEN!) - NICHT LÖSCHEN
+// HILFSFUNKTIONEN
 // ================================================================
-
-private fun getUnsafeOkHttpClient(): OkHttpClient {
-    try {
-        val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
-            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-        })
-        val sslContext = SSLContext.getInstance("SSL")
-        sslContext.init(null, trustAllCerts, SecureRandom())
-        return OkHttpClient.Builder()
-            .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
-            .hostnameVerifier { _, _ -> true }
-            .build()
-    } catch (e: Exception) {
-        throw RuntimeException(e)
-    }
-}
 
 private fun Uri.toScaledBitmap(context: Context): Bitmap {
     val contentResolver = context.contentResolver
@@ -136,6 +157,136 @@ fun StatusButton(icon: ImageVector, text: String, color: Color, isSelected: Bool
 fun SectionHeader(title: String) {
     Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
         Text(text = title, color = ThubNeonBlue, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+    }
+}
+
+// NEU: Thub-Style Toggle Switch
+@Composable
+fun ThubToggleSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    label: String,
+    description: String? = null
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(ThubDarkGray.copy(alpha = 0.3f))
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .clickable { onCheckedChange(!checked) },
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                color = TextWhite,
+                fontWeight = FontWeight.Medium
+            )
+            if (description != null) {
+                Text(
+                    text = description,
+                    color = TextWhite.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = ThubNeonBlue,
+                checkedTrackColor = ThubNeonBlue.copy(alpha = 0.5f),
+                uncheckedThumbColor = Color.Gray,
+                uncheckedTrackColor = Color.Gray.copy(alpha = 0.5f)
+            )
+        )
+    }
+}
+
+// NEU: Thub-Style Dropdown
+@Suppress("DEPRECATION")
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ThubDropdown(
+    label: String,
+    selectedValue: String,
+    options: List<String>,
+    onValueChange: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
+        OutlinedTextField(
+            value = selectedValue,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label, color = ThubNeonBlue) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = ThubNeonBlue,
+                unfocusedBorderColor = Color.Gray,
+                focusedTextColor = TextWhite,
+                unfocusedTextColor = TextWhite
+            ),
+            modifier = Modifier.fillMaxWidth().menuAnchor()
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(ThubDarkGray)
+        ) {
+            options.forEach { selectionOption ->
+                DropdownMenuItem(
+                    text = { Text(selectionOption, color = TextWhite) },
+                    onClick = {
+                        onValueChange(selectionOption)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+// NEU: Statistik-Item
+@Composable
+fun StatisticItem(
+    icon: ImageVector,
+    label: String,
+    value: String,
+    color: Color
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(ThubDarkGray.copy(alpha = 0.3f))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(28.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                color = TextWhite.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelSmall
+            )
+            Text(
+                text = value,
+                color = TextWhite,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }
 
@@ -236,10 +387,10 @@ fun ProfileScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val userId = auth.currentUser?.uid
 
-    // Helper: ImageLoader mit SSL-Hack (benutzt jetzt die Funktion von oben)
+    // Helper: ImageLoader mit permissivem SSL für eingeschränkte Zertifikate
     val imageLoader = remember {
         ImageLoader.Builder(context)
-            .okHttpClient { getUnsafeOkHttpClient() }
+            .okHttpClient { SecureHttpClient.createImageLoadingClient(context) }
             .crossfade(true)
             .build()
     }
@@ -255,6 +406,12 @@ fun ProfileScreen(
     var truckLength by remember { mutableStateOf("") }
     var truckType by remember { mutableStateOf("") }
     var profileImageUrl by remember { mutableStateOf("") }
+
+    // NEU: Einstellungen States
+    var shareLocation by remember { mutableStateOf(false) }
+    var language by remember { mutableStateOf("de") }
+    var darkMode by remember { mutableStateOf(false) }
+    var notificationsEnabled by remember { mutableStateOf(true) }
 
     var isUploading by remember { mutableStateOf(false) }
 
@@ -280,7 +437,7 @@ fun ProfileScreen(
                         bitmap.compress(Bitmap.CompressFormat.JPEG, 80, outputStream)
                         val imageBytes = outputStream.toByteArray()
 
-                        val client = getUnsafeOkHttpClient()
+                        val client = SecureHttpClient.createSecureClient(context, enableLogging = true)
 
                         val requestBody = MultipartBody.Builder()
                             .setType(MultipartBody.FORM)
@@ -297,26 +454,28 @@ fun ProfileScreen(
                             .post(requestBody)
                             .build()
 
-                        client.newCall(request).execute().use { response ->
-                            if (!response.isSuccessful) throw Exception("Fehler: ${response.code}")
+                        val response = client.newCall(request).execute()
 
-                            val responseBody = response.body?.string() ?: throw Exception("Leere Antwort")
-                            val jsonResponse = JSONObject(responseBody)
+                        if (!response.isSuccessful) {
+                            throw Exception("Upload-Fehler: ${response.code}")
+                        }
 
-                            if (jsonResponse.getString("status") == "success") {
-                                val newUrl = jsonResponse.getString("url")
-                                if (userId != null) {
-                                    firestore.collection("users").document(userId)
-                                        .update("profileImageUrl", newUrl)
-                                }
-                                profileImageUrl = newUrl
-                            } else {
-                                throw Exception(jsonResponse.getString("message"))
+                        val responseBody = response.body?.string() ?: throw Exception("Leere Antwort vom Server")
+                        val jsonResponse = JSONObject(responseBody)
+
+                        if (jsonResponse.getString("status") == "success") {
+                            val newUrl = jsonResponse.getString("url")
+                            if (userId != null) {
+                                firestore.collection("users").document(userId)
+                                    .update("profileImageUrl", newUrl)
                             }
+                            profileImageUrl = newUrl
+                        } else {
+                            throw Exception(jsonResponse.getString("message"))
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
-                        launch(Dispatchers.Main) {
+                        coroutineScope.launch {
                             snackbarHostState.showSnackbar("Upload fehlgeschlagen: ${e.message}")
                         }
                     } finally {
@@ -345,6 +504,11 @@ fun ProfileScreen(
                             profileImageUrl = it.profileImageUrl
                             truckLength = it.truckLength
                             truckType = it.truckType
+                            // NEU: Einstellungen laden
+                            shareLocation = it.shareLocation
+                            language = it.language
+                            darkMode = it.darkMode
+                            notificationsEnabled = it.notificationsEnabled
                         }
                     }
                 }
@@ -364,7 +528,12 @@ fun ProfileScreen(
                 status = currentStatus,
                 truckLength = truckLength,
                 truckType = truckType,
-                profileImageUrl = profileImageUrl.ifEmpty { currentProfile.profileImageUrl }
+                profileImageUrl = profileImageUrl.ifEmpty { currentProfile.profileImageUrl },
+                // NEU: Einstellungen speichern
+                shareLocation = shareLocation,
+                language = language,
+                darkMode = darkMode,
+                notificationsEnabled = notificationsEnabled
             )
 
             firestore.collection("users").document(userId).set(updatedData)
@@ -461,6 +630,77 @@ fun ProfileScreen(
                 ThubProfileTextField(truckLength, { truckLength = it }, "LKW Gesamtlänge (m)", keyboardType = KeyboardType.Number)
                 Spacer(modifier = Modifier.height(8.dp))
                 ThubProfileTextField(truckType, { truckType = it }, "LKW Typ (z.B. Sattelzug)")
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // NEU: EINSTELLUNGEN ⚙️
+                SectionHeader("EINSTELLUNGEN ⚙️")
+                ThubDropdown(
+                    label = "Sprache / Language",
+                    selectedValue = if (language == "de") "Deutsch" else "English",
+                    options = listOf("Deutsch", "English"),
+                    onValueChange = { newLanguage ->
+                        language = if (newLanguage == "Deutsch") "de" else "en"
+                    }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                ThubToggleSwitch(
+                    checked = shareLocation,
+                    onCheckedChange = { shareLocation = it },
+                    label = "Standort freigeben",
+                    description = "Zeige deinen Standort Freunden auf der Karte"
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                ThubToggleSwitch(
+                    checked = notificationsEnabled,
+                    onCheckedChange = { notificationsEnabled = it },
+                    label = "Benachrichtigungen",
+                    description = "Erhalte Toast-Nachrichten bei neuen Ereignissen"
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                ThubToggleSwitch(
+                    checked = darkMode,
+                    onCheckedChange = { darkMode = it },
+                    label = "Dunkler Modus",
+                    description = "Nutze dunkles Theme"
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // NEU: STATISTIKEN 📊
+                SectionHeader("MEINE STATISTIKEN 📊")
+                StatisticItem(
+                    icon = Icons.Filled.LocalParking,
+                    label = "Parkplätze genutzt",
+                    value = (userProfile?.totalParkings ?: 0).toString(),
+                    color = Color(0xFFFFA500)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                StatisticItem(
+                    icon = Icons.Filled.Star,
+                    label = "Bewertungen abgegeben",
+                    value = (userProfile?.totalRatings ?: 0).toString(),
+                    color = Color.Yellow
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                StatisticItem(
+                    icon = Icons.Filled.Group,
+                    label = "Freunde",
+                    value = (userProfile?.totalFriends ?: 0).toString(),
+                    color = ThubNeonBlue
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                StatisticItem(
+                    icon = Icons.Filled.Streetview,
+                    label = "Ampel-Updates",
+                    value = (userProfile?.ampelUpdates ?: 0).toString(),
+                    color = Color.Green
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                StatisticItem(
+                    icon = Icons.Filled.Cake,
+                    label = "Mitglied seit",
+                    value = formatDate(userProfile?.createdAt ?: 0),
+                    color = Color(0xFFFF1493)
+                )
                 Spacer(modifier = Modifier.height(32.dp))
 
                 Button(

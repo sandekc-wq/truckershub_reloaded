@@ -4,6 +4,8 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     // Hier stecken wir den Firebase-Stecker in das Modul:
     alias(libs.plugins.google.services)
+    // NEU: Room Database für Offline-Cache
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -75,4 +77,19 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.4.0")
     // Für den Upload zum Server
     implementation("com.squareup.okhttp3:okhttp:4.11.0")
+    // NEU: HTTP LoggingInterceptor
+    implementation("com.squareup.okhttp3:logging-interceptor:4.11.0")
+
+    // NEU: Room Database für Offline-Cache
+    val roomVersion = "2.6.1"
+    implementation("androidx.room:room-runtime:$roomVersion")
+    implementation("androidx.room:room-ktx:$roomVersion")
+    ksp("androidx.room:room-compiler:$roomVersion")
+    implementation("androidx.room:room-paging:$roomVersion")
+
+    // NEU: Firebase Coroutines Support
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
+
+    // NEU: Lifecycle Compose für collectAsStateWithLifecycle
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
 }

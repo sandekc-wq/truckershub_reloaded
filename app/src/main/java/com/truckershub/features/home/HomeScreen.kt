@@ -11,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -20,6 +21,9 @@ import com.truckershub.core.design.ThubBlack
 import com.truckershub.core.design.ThubDarkGray
 import com.truckershub.core.design.ThubNeonBlue
 import com.truckershub.core.design.TextWhite
+import com.truckershub.core.network.rememberOnlineStatus
+import com.truckershub.core.ui.components.OfflineWarningBanner
+import com.truckershub.core.ui.components.LastUpdatedBadge
 import com.truckershub.features.checklist.ChecklistScreen
 import com.truckershub.features.profile.ProfileScreen
 import kotlinx.coroutines.launch
@@ -30,12 +34,20 @@ import kotlinx.coroutines.launch
 fun HomeScreen(
     onLogoutClick: () -> Unit
 ) {
+    val context = LocalContext.current
+
     // Hier merken wir uns, welcher Tab gerade aktiv ist (0=Map, 1=Check, 2=Profil)
     var selectedTab by remember { mutableIntStateOf(0) }
 
     // Status für das seitliche Menü (Drawer)
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+
+    // NEU: Online-Status Prüfung
+    val isOnline by rememberOnlineStatus(context)
+
+    // Letzte Aktualisierung der Daten (Beispiel: Parkplätze)
+    val lastDataUpdate = remember { System.currentTimeMillis() }
 
     // 1. DER DRAWER WRAPPER (Das Menü-Gerüst)
     ModalNavigationDrawer(
@@ -141,6 +153,15 @@ fun HomeScreen(
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
                             Icon(Icons.Default.Menu, contentDescription = "Menü", tint = ThubNeonBlue)
                         }
+                    },
+                    actions = {
+                        // NEU: Letzte Aktualisierung Badge in TopBar
+                        if (!isOnline) {
+                            LastUpdatedBadge(
+                                lastUpdated = lastDataUpdate,
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                        }
                     }
                 )
             },
@@ -192,18 +213,30 @@ fun HomeScreen(
             },
             containerColor = ThubBlack
         ) { paddingValues ->
-            // Der Inhalt wechselt je nach Knopfdruck
-            Surface(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(paddingValues),
-                color = ThubBlack
+                    .padding(paddingValues)
             ) {
-                when (selectedTab) {
-                    // HIER WAR DER FEHLER: Jetzt mit .fillMaxSize()
-                    0 -> OsmMap(modifier = Modifier.fillMaxSize())
-                    1 -> ChecklistScreen()
-                    2 -> ProfileScreen(onBackClick = { selectedTab = 0 })
+                // NEU: Offline-Warnung Banner
+                OfflineWarningBanner(
+                    isVisible = !isOnline,
+                    lastUpdated = lastDataUpdate
+                )
+
+                // Der Inhalt wechselt je nach Knopfdruck
+                Surface(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .weight(1f),
+                    color = ThubBlack
+                ) {
+                    when (selectedTab) {
+                        // HIER WAR DER FEHLER: Jetzt mit .fillMaxSize()
+                        0 -> OsmMap(modifier = Modifier.fillMaxSize())
+                        1 -> ChecklistScreen()
+                        2 -> ProfileScreen(onBackClick = { selectedTab = 0 })
+                    }
                 }
             }
         }

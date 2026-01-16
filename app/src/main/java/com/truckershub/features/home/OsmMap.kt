@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddReaction
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Route
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -49,6 +50,7 @@ import com.truckershub.core.design.ThubNeonBlue
 import com.truckershub.features.parking.ParkingDetailScreen
 import com.truckershub.features.parking.ParkingViewModel
 import com.truckershub.features.parking.components.ParkingMarkerHelper
+import com.truckershub.features.navigation.components.RoutePlanningPanel
 import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -86,6 +88,15 @@ fun OsmMap(
     val parkingViewModel: ParkingViewModel = viewModel()
     val parkingSpots = parkingViewModel.parkingSpots
     var showParkingDetail by remember { mutableStateOf(false) }
+    var hasLoadedInitialParkingSpots by remember { mutableStateOf(false) }
+
+    // NEU: Route-Planung States
+    var isRoutePlanningVisible by remember { mutableStateOf(true) }  // GEÄNDERT: Jetzt TRUE = Standard sichtbar
+    var isRoutePlanningExpanded by remember { mutableStateOf(false) }
+    var startInput by remember { mutableStateOf("") }
+    var destinationInput by remember { mutableStateOf("") }
+    var waypoints by remember { mutableStateOf<List<String>>(emptyList()) }
+    var isCalculatingRoute by remember { mutableStateOf(false) }
 
     var otherTrucks by remember { mutableStateOf<List<TruckerBuddy>>(emptyList()) }
     var selectedBuddy by remember { mutableStateOf<TruckerBuddy?>(null) }
@@ -103,14 +114,24 @@ fun OsmMap(
 
     // 1. DATEN LADEN
     LaunchedEffect(Unit) {
+        // NEU: Parkplätze SOFORT mit Default-Position laden (Deutschland-Mitte)
+        if (!hasLoadedInitialParkingSpots) {
+            val defaultLocation = GeoPoint(51.1657, 10.4515) // Deutschland-Mitte
+            parkingViewModel.loadParkingSpotsNearby(defaultLocation, radiusKm = 100.0)
+            hasLoadedInitialParkingSpots = true
+        }
+
         firestore.collection("users").addSnapshotListener { snapshot, _ ->
             val combinedList = dummies.toMutableList()
+
+            // NEU: Parkplätze mit GPS-Position laden wenn GPS gefunden
             myLocationOverlay?.myLocation?.let { myLoc ->
                 parkingViewModel.loadParkingSpotsNearby(
                     GeoPoint(myLoc.latitude, myLoc.longitude),
                     radiusKm = 50.0
                 )
             }
+
             if (snapshot != null) {
                 for (doc in snapshot.documents) {
                     if (doc.id == userId) continue
@@ -149,6 +170,7 @@ fun OsmMap(
 
     // 3. UI MAP
     Box(modifier = modifier.fillMaxSize()) {
+        // FIRST: AndroidView (MapView) - das ist die Basis
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
@@ -227,6 +249,37 @@ fun OsmMap(
             }
         )
 
+        // THEN: Route-Planung Panel ÜBER der Karte
+        if (isRoutePlanningVisible) {
+            RoutePlanningPanel(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 8.dp),
+                expanded = isRoutePlanningExpanded,
+                onExpandToggle = { isRoutePlanningExpanded = !isRoutePlanningExpanded },
+                onStartChanged = { startInput = it },
+                onDestinationChanged = { destinationInput = it },
+                onWaypointAdded = {
+                    waypoints = waypoints + ""
+                },
+                onCalculateRoute = {
+                    // TODO: Route berechnen (Phase 3)
+                    isCalculatingRoute = true
+                    // Placeholder für Route-Berechnung
+                    coroutineScope.launch {
+                        kotlinx.coroutines.delay(1000)
+                        isCalculatingRoute = false
+                    }
+                },
+                onMinimize = {
+                    isRoutePlanningExpanded = false
+                },
+                currentLocation = myLocationOverlay?.myLocation?.let {
+                    GeoPoint(it.latitude, it.longitude)
+                }
+            )
+        }
+
         FloatingActionButton(
             onClick = {
                 myLocationOverlay?.enableFollowLocation()
@@ -237,12 +290,13 @@ fun OsmMap(
                     parkingViewModel.loadParkingSpotsNearby(searchPoint, 50.0)
                 }
             },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 16.dp, end = 16.dp),
             containerColor = ThubDarkGray,
             contentColor = ThubNeonBlue
         ) {
             Icon(Icons.Filled.MyLocation, "Zentrieren & Laden")
         }
+
 
         if (selectedBuddy != null) {
             val buddy = selectedBuddy!!

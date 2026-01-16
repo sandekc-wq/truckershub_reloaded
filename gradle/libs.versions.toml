@@ -1,6 +1,7 @@
 [versions]
 agp = "8.8.0"
 kotlin = "2.0.21"
+ksp = "2.0.21-1.0.28"
 coreKtx = "1.15.0"
 junit = "4.13.2"
 junitVersion = "1.2.1"
@@ -45,3 +46,5 @@ kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 # NEU: Der Stecker für Firebase
 google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
+# NEU: KSP für Room Database
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
