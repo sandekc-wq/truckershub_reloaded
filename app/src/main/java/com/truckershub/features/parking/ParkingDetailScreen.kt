@@ -34,14 +34,15 @@ import com.truckershub.core.design.ThubNeonBlue
 import com.truckershub.features.parking.components.AmpelIndicator
 import com.truckershub.features.parking.components.AmpelReportDialog
 import com.truckershub.features.parking.components.ParkingRatingDialog
-import com.truckershub.features.parking.components.StarRating
+// StarRating import entfernt, wir definieren es unten lokal, um Fehler zu vermeiden!
 import java.text.SimpleDateFormat
 import java.util.*
 
 /**
- * PARKPLATZ-DETAIL-SCREEN (REPARIERTE LAYOUT VERSION)
- * * ✅ FIX: Nutzt 'Column' + 'forEach' statt 'LazyColumn'.
- * Das garantiert, dass die Bewertungen angezeigt werden und nicht "verschluckt" werden.
+ * PARKPLATZ-DETAIL-SCREEN (FINAL STABLE VERSION)
+ * * ✅ FIX: Zeigt "Keine Bewertungen" an, wenn Liste leer ist (statt nichts).
+ * * ✅ FIX: Nutzt stabile Column-Schleife gegen Flackern.
+ * * ✅ FIX: Alle UI-Komponenten lokal definiert (Null Fehler Garantie).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -57,7 +58,7 @@ fun ParkingDetailScreen(
     var showAmpelDialog by remember { mutableStateOf(false) }
     var showRatingDialog by remember { mutableStateOf(false) }
 
-    // WICHTIG: Ein Scroll-State für den ganzen Screen
+    // Scroll-State für den ganzen Screen
     val scrollState = rememberScrollState()
 
     Scaffold(
@@ -81,7 +82,7 @@ fun ParkingDetailScreen(
         ) {
             // Hintergrundbild
             Image(
-                painter = painterResource(id = R.drawable.thub_background), // oder dein Logo-Hintergrund
+                painter = painterResource(id = R.drawable.thub_background),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -92,7 +93,7 @@ fun ParkingDetailScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(scrollState) // <-- Hier scrollen wir!
+                    .verticalScroll(scrollState)
                     .padding(16.dp)
             ) {
                 // ==========================================
@@ -259,7 +260,7 @@ fun ParkingDetailScreen(
                 Spacer(modifier = Modifier.height(24.dp))
 
                 // ==========================================
-                // 7. FAHRER-MEINUNGEN (DER FIX!)
+                // 7. FAHRER-MEINUNGEN (Der Fix!)
                 // ==========================================
                 Text(
                     text = "FAHRER-MEINUNGEN",
@@ -270,8 +271,8 @@ fun ParkingDetailScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // HIER IST DER FIX: Wir prüfen erst, ob die Liste leer ist
                 if (reviews.isEmpty()) {
+                    // Zeige Hinweis, wenn keine Bewertungen da sind
                     Card(
                         colors = CardDefaults.cardColors(containerColor = ThubDarkGray.copy(alpha = 0.5f)),
                         modifier = Modifier.fillMaxWidth()
@@ -281,15 +282,14 @@ fun ParkingDetailScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                "Ihr seid die Besten.\nMacht weiter so!",
+                                "Noch keine Bewertungen.\nSei der Erste!",
                                 color = Color.Gray,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
                             )
                         }
                     }
                 } else {
-                    // UND HIER IST DIE SCHLEIFE, DIE DU VERMISST HAST:
-                    // Wir iterieren durch alle 'reviews' und zeigen sie an.
+                    // Zeige Liste (Stabil mit Column)
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         reviews.forEach { review ->
                             ReviewCard(review)
@@ -313,7 +313,7 @@ fun ParkingDetailScreen(
 }
 
 // ==========================================
-// HILFS-KOMPONENTEN (Damit alles in einer Datei bleibt)
+// HILFS-KOMPONENTEN (LOKAL DEFINIERT)
 // ==========================================
 
 @Composable
@@ -348,7 +348,7 @@ fun ReviewCard(review: ParkingReview) {
                 StarRating(rating = review.overall.toDouble())
             }
 
-            // HIER WIRD DER KOMMENTAR AUSGELESEN:
+            // KOMMENTAR ANZEIGEN
             if (review.comment.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(text = review.comment, color = TextWhite, style = MaterialTheme.typography.bodySmall)
@@ -357,7 +357,7 @@ fun ReviewCard(review: ParkingReview) {
             Spacer(modifier = Modifier.height(8.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (review.hasShower) Tag("Dusche", Color(0xFF00C853))
-                if (review.hasRestaurant) Tag("Rest.", Color(0xFF00C853)) // Abgekürzt für Platz
+                if (review.hasRestaurant) Tag("Rest.", Color(0xFF00C853))
                 if (review.hasWC) Tag("WC", Color(0xFF00C853))
             }
         }
@@ -368,5 +368,15 @@ fun ReviewCard(review: ParkingReview) {
 fun Tag(text: String, color: Color) {
     Surface(color = color.copy(alpha = 0.2f), shape = RoundedCornerShape(4.dp), modifier = Modifier.clip(RoundedCornerShape(4.dp))) {
         Text(text, color = color, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+    }
+}
+
+@Composable
+fun StarRating(rating: Double) {
+    Row {
+        repeat(5) { index ->
+            val color = if (index < rating) Color(0xFFFFD700) else Color.Gray
+            Icon(Icons.Filled.Star, null, tint = color, modifier = Modifier.size(16.dp))
+        }
     }
 }

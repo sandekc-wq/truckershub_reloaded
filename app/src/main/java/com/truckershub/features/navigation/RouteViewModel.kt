@@ -1,167 +1,144 @@
 package com.truckershub.features.navigation
 
+import android.app.Application
+import android.location.Geocoder
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.GeoPoint
+import com.truckershub.core.data.model.DefaultTruckProfiles
 import com.truckershub.core.data.model.Route
 import com.truckershub.core.data.model.RouteDetails
 import com.truckershub.core.data.model.RoutePoint
 import com.truckershub.core.data.model.RouteRequest
-import com.truckershub.core.data.model.RouteInstruction
 import com.truckershub.core.data.model.TruckProfile
-import com.truckershub.core.data.repository.RouteRepository
+// WICHTIG: Wir nutzen jetzt den neuen LKW-Client
+import com.truckershub.core.data.network.OrsClient
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.Locale
 
-/**
- * ROUTE VIEW MODEL
- *
- * Verwaltet den Zustand der Routenplanung
- * Kommuniziert zwischen UI (RouteScreen) und Repository
- *
- * Schema:
- * RouteScreen → RouteViewModel → RouteRepository → GraphHopper API
- */
-class RouteViewModel(
-    private val repository: RouteRepository = RouteRepository(),
-    private val auth: FirebaseAuth = FirebaseAuth.getInstance()
-) : ViewModel() {
+class RouteViewModel(application: Application) : AndroidViewModel(application) {
+
+    // Hier läuft jetzt der neue OpenRouteService Client (LKW)
+    private val routingClient = OrsClient()
+
+    private val auth = FirebaseAuth.getInstance()
+    private val context = application.applicationContext
 
     // ==========================================
     // ZUSTAND (STATE)
     // ==========================================
 
     var startPoint by mutableStateOf("")
-
     var destinationPoint by mutableStateOf("")
-
     var waypoints by mutableStateOf<List<RoutePoint>>(emptyList())
 
-    var selectedTruckProfile by mutableStateOf<TruckProfile?>(null)
+    // Standard-LKW als Startwert
+    var selectedTruckProfile by mutableStateOf<TruckProfile?>(
+        DefaultTruckProfiles.STANDARD_EU_TRUCK
+    )
 
     var currentRoute by mutableStateOf<Route?>(null)
-
     var isCalculating by mutableStateOf(false)
-
     var errorMessage by mutableStateOf<String?>(null)
 
-    private val currentUserId = auth.currentUser?.uid
+    // UI-Zustand für die Navigationsanweisungen
+    var instructions by mutableStateOf<List<com.truckershub.core.data.model.RouteInstruction>>(emptyList())
+        private set
 
     // ==========================================
-    // INPUT FUNKTIONEN
+    // FUNKTIONEN
     // ==========================================
 
-    fun updateStartPoint(point: String) {
-        startPoint = point
-        errorMessage = null
-    }
-
-    fun updateDestinationPoint(point: String) {
-        destinationPoint = point
-        errorMessage = null
-    }
-
-    fun addWaypoint(waypoint: RoutePoint) {
-        waypoints = waypoints + waypoint
-    }
-
-    fun removeWaypoint(index: Int) {
-        if (index in waypoints.indices) {
-            waypoints = waypoints.toMutableList().apply { removeAt(index) }.toList()
-        }
-    }
-
-    fun clearWaypoints() {
-        waypoints = emptyList()
-    }
-
-    fun selectTruckProfile(profile: TruckProfile) {
-        selectedTruckProfile = profile
-        errorMessage = null
-    }
-
-    // ==========================================
-    // ROUTING FUNKTIONEN
-    // ==========================================
+    fun updateStartPoint(point: String) { startPoint = point }
+    fun updateDestinationPoint(point: String) { destinationPoint = point }
 
     fun calculateRoute() {
-        if (startPoint.isBlank()) {
-            errorMessage = "Start-Punkt erforderlich"
-            return
-        }
-        if (destinationPoint.isBlank()) {
-            errorMessage = "Ziel-Punkt erforderlich"
-            return
-        }
-        if (selectedTruckProfile == null) {
-            errorMessage = "Truck-Profil erforderlich"
-            return
-        }
-        if (!selectedTruckProfile!!.isValid()) {
-            errorMessage = "Truck-Profil unvollständig (Länge, Höhe, Gewicht müssen gesetzt sein)"
+        if (startPoint.isBlank() || destinationPoint.isBlank()) {
+            errorMessage = "Start und Ziel eingeben"
             return
         }
 
         isCalculating = true
         errorMessage = null
+        currentRoute = null
 
         viewModelScope.launch {
             try {
-                val startGeo = parseAddressToGeoPoint(startPoint)
-                val destGeo = parseAddressToGeoPoint(destinationPoint)
+                // 1. Geocoding (Adresse zu Koordinaten)
+                val startGeo = getGeoPointFromAddress(startPoint)
+                val destGeo = getGeoPointFromAddress(destinationPoint)
 
+                if (startGeo == null || destGeo == null) {
+                    errorMessage = "Adresse nicht gefunden"
+                    isCalculating = false
+                    return@launch
+                }
+
+                // 2. Profil prüfen
+                val profile = selectedTruckProfile ?: DefaultTruckProfiles.STANDARD_EU_TRUCK
+
+                // Gesamtgewicht berechnen
+                val totalWeight = profile.truck.weight + profile.trailer.weight
+
+                // 3. Anfrage bauen
+                // Der OrsClient braucht GeoPoints und Maße
                 val request = RouteRequest(
                     startPoint = startGeo,
                     endPoint = destGeo,
-                    waypoints = waypoints.map { it.location },
+                    waypoints = emptyList(), // Waypoints später einbauen
+
+                    // WICHTIG: Diese Daten gehen an OpenRouteService für das LKW-Routing
+                    vehicleHeight = profile.truck.height,
+                    vehicleWeight = totalWeight,
+                    vehicleWidth = profile.truck.width,
+                    hazmat = profile.hazmat,
+
+                    // Dummy-Werte für Kompatibilität (falls deine Klasse die noch verlangt)
                     vehicle = "truck",
-                    profile = "truck",
-                    vehicleLength = selectedTruckProfile!!.truck.length,
-                    vehicleHeight = selectedTruckProfile!!.truck.height,
-                    vehicleWidth = selectedTruckProfile!!.truck.width,
-                    vehicleWeight = (selectedTruckProfile!!.truck.weight + selectedTruckProfile!!.trailer.weight),
-                    hazmat = selectedTruckProfile!!.hazmat,
-                    avoidFerries = true,
-                    avoidTollRoads = false,
-                    locale = "de"
+                    profile = "driving-hgv"
                 )
 
-                val response = repository.calculateRoute(request)
+                println("Sende Anfrage an ORS: Start=${startGeo.latitude},${startGeo.longitude} Ziel=${destGeo.latitude},${destGeo.longitude}")
 
-                if (response != null) {
-                    val route = Route(
-                        id = "route_${System.currentTimeMillis()}",
-                        userId = currentUserId ?: "",
-                        name = "$startPoint → $destinationPoint",
-                        startPoint = RoutePoint(
-                            name = startPoint,
-                            location = startGeo,
-                            address = startPoint
-                        ),
-                        endPoint = RoutePoint(
-                            name = destinationPoint,
-                            location = destGeo,
-                            address = destinationPoint
-                        ),
-                        waypoints = waypoints,
-                        truckProfile = selectedTruckProfile,
-                        routeDetails = RouteDetails(
-                            distance = response.paths?.firstOrNull()?.distance ?: 0.0,
-                            duration = response.paths?.firstOrNull()?.time ?: 0L,
-                            points = response.paths?.firstOrNull()?.points ?: "",
-                            instructions = response.paths?.firstOrNull()?.instructions?.map { RouteInstruction(it.text, it.street_name, it.time, it.distance, it.sign) } ?: emptyList()
-                        ),
-                        estimatedFuelCost = calculateFuelCost(response.paths?.firstOrNull()?.distance ?: 0.0),
-                        estimatedTollCost = 0.0  // TODO: Maut-Berechnung integrieren
-                    )
-
-                    currentRoute = route
-                } else {
-                    errorMessage = "Route konnte nicht berechnet werden"
+                // 4. API Aufruf (Motor starten!)
+                val response = withContext(Dispatchers.IO) {
+                    routingClient.calculateRoute(request)
                 }
+
+                if (response != null && !response.paths.isNullOrEmpty()) {
+                    val path = response.paths[0]
+
+                    // Anweisungen für die UI speichern
+                    instructions = path.instructions ?: emptyList()
+
+                    // Route Objekt für die Anzeige erstellen
+                    currentRoute = Route(
+                        id = "route_${System.currentTimeMillis()}",
+                        userId = auth.currentUser?.uid ?: "guest",
+                        name = "$startPoint → $destinationPoint",
+                        startPoint = RoutePoint(startPoint, startGeo, startPoint),
+                        endPoint = RoutePoint(destinationPoint, destGeo, destinationPoint),
+                        routeDetails = RouteDetails(
+                            distance = path.distance,
+                            duration = path.time,
+                            points = path.points, // Das ist die codierte blaue Linie
+                            instructions = path.instructions ?: emptyList()
+                        ),
+                        truckProfile = profile,
+                        // Grobe Schätzung: 30L/100km * 1.65€
+                        estimatedFuelCost = (path.distance / 1000) / 100 * 30.0 * 1.65,
+                        estimatedTollCost = 0.0 // Maut kommt später
+                    )
+                } else {
+                    errorMessage = "Keine Route gefunden (Key prüfen oder Strecke zu lang für Free-Tier?)"
+                }
+
             } catch (e: Exception) {
                 errorMessage = "Fehler: ${e.message}"
                 e.printStackTrace()
@@ -171,55 +148,49 @@ class RouteViewModel(
         }
     }
 
+    // Später implementieren
     fun saveRoute() {
-        if (currentRoute == null) {
-            errorMessage = "Keine Route zum Speichern"
-            return
-        }
+        // TODO: Route in Firestore speichern
+    }
 
-        val routeToSave = currentRoute!!.copy(isSaved = true)
-
-        viewModelScope.launch {
+    // Hilfsfunktion: Adresse -> Koordinaten
+    private suspend fun getGeoPointFromAddress(address: String): GeoPoint? {
+        return withContext(Dispatchers.IO) {
             try {
-                val success = repository.saveRoute(routeToSave)
-                if (success) {
-                    currentRoute = routeToSave
-                    errorMessage = null
+                // Check auf Koordinaten-Eingabe "53.5, 8.5"
+                if (address.contains(",")) {
+                    val parts = address.split(",")
+                    if (parts.size == 2) {
+                        val latStr = parts[0].trim()
+                        val lonStr = parts[1].trim()
+                        // Prüfen ob es Zahlen sind
+                        if (latStr.matches(Regex("-?\\d+(\\.\\d+)?")) && lonStr.matches(Regex("-?\\d+(\\.\\d+)?"))) {
+                            return@withContext GeoPoint(latStr.toDouble(), lonStr.toDouble())
+                        }
+                    }
+                }
+
+                // Echte Adress-Suche
+                val geocoder = Geocoder(context, Locale.GERMANY)
+                @Suppress("DEPRECATION")
+                val results = geocoder.getFromLocationName(address, 1)
+                if (!results.isNullOrEmpty()) {
+                    GeoPoint(results[0].latitude, results[0].longitude)
                 } else {
-                    errorMessage = "Route konnte nicht gespeichert werden"
+                    null
                 }
             } catch (e: Exception) {
-                errorMessage = "Fehler beim Speichern: ${e.message}"
+                e.printStackTrace()
+                null
             }
         }
     }
 
     fun clearRoute() {
         currentRoute = null
-        waypoints = emptyList()
+        startPoint = ""
+        destinationPoint = ""
         errorMessage = null
-    }
-
-    // ==========================================
-    // HILFSFUNKTIONEN
-    // ==========================================
-
-    private fun parseAddressToGeoPoint(address: String): GeoPoint {
-        return when {
-            address.contains("München", ignoreCase = true) -> GeoPoint(48.1351, 11.5820)
-            address.contains("Hamburg", ignoreCase = true) -> GeoPoint(53.5511, 9.9937)
-            address.contains("Berlin", ignoreCase = true) -> GeoPoint(52.5200, 13.4050)
-            address.contains("Köln", ignoreCase = true) -> GeoPoint(50.9375, 6.9603)
-            address.contains("Frankfurt", ignoreCase = true) -> GeoPoint(50.1109, 8.6821)
-            else -> GeoPoint(48.1351, 11.5820)
-        }
-    }
-
-    private fun calculateFuelCost(distanceMeters: Double): Double {
-        val distanceKm = distanceMeters / 1000
-        val literPerKm = 0.3  // 30 Liter pro 100km für LKW
-        val literNeeded = distanceKm * literPerKm
-        val fuelPrice = 1.65  // EUR pro Liter (Durchschnitt Diesel)
-        return literNeeded * fuelPrice
+        instructions = emptyList()
     }
 }

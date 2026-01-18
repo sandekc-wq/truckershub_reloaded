@@ -1,6 +1,7 @@
 package com.truckershub.features.home
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -14,15 +15,14 @@ import android.graphics.drawable.Drawable
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AddReaction
 import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.material.icons.filled.Route
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -50,16 +50,18 @@ import com.truckershub.core.design.ThubNeonBlue
 import com.truckershub.features.parking.ParkingDetailScreen
 import com.truckershub.features.parking.ParkingViewModel
 import com.truckershub.features.parking.components.ParkingMarkerHelper
+import com.truckershub.features.navigation.RouteViewModel
 import com.truckershub.features.navigation.components.RoutePlanningPanel
 import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint as OsmGeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 import java.util.Calendar
-import org.osmdroid.util.GeoPoint as OsmGeoPoint
 
 // --- DATENMODELL ---
 data class TruckerBuddy(
@@ -85,18 +87,17 @@ fun OsmMap(
     val currentHour = remember { Calendar.getInstance().get(Calendar.HOUR_OF_DAY) }
     val isNightMode = currentHour >= 17 || currentHour < 7
 
+    // ViewModels
     val parkingViewModel: ParkingViewModel = viewModel()
+    val routeViewModel: RouteViewModel = viewModel()
+
     val parkingSpots = parkingViewModel.parkingSpots
     var showParkingDetail by remember { mutableStateOf(false) }
     var hasLoadedInitialParkingSpots by remember { mutableStateOf(false) }
 
-    // NEU: Route-Planung States
-    var isRoutePlanningVisible by remember { mutableStateOf(true) }  // GEÄNDERT: Jetzt TRUE = Standard sichtbar
+    // Route-Planung UI States
+    var isRoutePlanningVisible by remember { mutableStateOf(true) }
     var isRoutePlanningExpanded by remember { mutableStateOf(false) }
-    var startInput by remember { mutableStateOf("") }
-    var destinationInput by remember { mutableStateOf("") }
-    var waypoints by remember { mutableStateOf<List<String>>(emptyList()) }
-    var isCalculatingRoute by remember { mutableStateOf(false) }
 
     var otherTrucks by remember { mutableStateOf<List<TruckerBuddy>>(emptyList()) }
     var selectedBuddy by remember { mutableStateOf<TruckerBuddy?>(null) }
@@ -107,31 +108,25 @@ fun OsmMap(
     val dummies = remember {
         listOf(
             TruckerBuddy("dummy1", 53.402, 8.448, "Diesel-Dieter", "Pause", "", "Sattelzug"),
-            TruckerBuddy("dummy2", 53.330, 8.480, "Logistik-Lisa", "Fahrbereit", "", "Tankwagen"),
-            TruckerBuddy("dummy3", 53.485, 8.485, "Fernfahrer-Fritz", "Laden/Entl.", "", "Kipper")
+            TruckerBuddy("dummy2", 53.330, 8.480, "Logistik-Lisa", "Fahrbereit", "", "Tankwagen")
         )
     }
 
-    // 1. DATEN LADEN
     LaunchedEffect(Unit) {
-        // NEU: Parkplätze SOFORT mit Default-Position laden (Deutschland-Mitte)
         if (!hasLoadedInitialParkingSpots) {
-            val defaultLocation = GeoPoint(51.1657, 10.4515) // Deutschland-Mitte
+            val defaultLocation = GeoPoint(51.1657, 10.4515)
             parkingViewModel.loadParkingSpotsNearby(defaultLocation, radiusKm = 100.0)
             hasLoadedInitialParkingSpots = true
         }
 
         firestore.collection("users").addSnapshotListener { snapshot, _ ->
             val combinedList = dummies.toMutableList()
-
-            // NEU: Parkplätze mit GPS-Position laden wenn GPS gefunden
             myLocationOverlay?.myLocation?.let { myLoc ->
                 parkingViewModel.loadParkingSpotsNearby(
                     GeoPoint(myLoc.latitude, myLoc.longitude),
                     radiusKm = 50.0
                 )
             }
-
             if (snapshot != null) {
                 for (doc in snapshot.documents) {
                     if (doc.id == userId) continue
@@ -148,7 +143,6 @@ fun OsmMap(
         }
     }
 
-    // 2. GPS UPDATES
     DisposableEffect(Unit) {
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         val locationListener = object : LocationListener {
@@ -168,9 +162,7 @@ fun OsmMap(
         onDispose { locationManager.removeUpdates(locationListener) }
     }
 
-    // 3. UI MAP
     Box(modifier = modifier.fillMaxSize()) {
-        // FIRST: AndroidView (MapView) - das ist die Basis
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
@@ -202,8 +194,25 @@ fun OsmMap(
                 }
             },
             update = { mapView ->
-                mapView.overlays.removeIf { it is Marker && it.id != "MY_LOC" }
-                val myLoc = myLocationOverlay?.myLocation
+                mapView.overlays.removeIf { it is Marker && it.id != "MY_LOC" && it.id != "ROUTE_START" && it.id != "ROUTE_END" }
+                mapView.overlays.removeIf { it is Polyline }
+
+                // --- ROUTE ZEICHNEN ---
+                val route = routeViewModel.currentRoute
+                if (route != null) {
+                    val encodedString = route.routeDetails.points
+
+                    // KORREKTUR: Wir nutzen die eigene Funktion am Ende der Datei
+                    val points = decodePolyline(encodedString)
+
+                    val polyline = Polyline()
+                    polyline.setPoints(points)
+                    polyline.outlinePaint.color = ThubNeonBlue.toArgb()
+                    polyline.outlinePaint.strokeWidth = 15f
+                    polyline.outlinePaint.strokeCap = Paint.Cap.ROUND
+
+                    mapView.overlays.add(0, polyline)
+                }
 
                 ParkingMarkerHelper.updateParkingMarkers(
                     mapView = mapView,
@@ -215,41 +224,31 @@ fun OsmMap(
                 )
 
                 otherTrucks.forEach { buddy ->
-                    val dist = if (myLoc != null) {
-                        val res = FloatArray(1)
-                        Location.distanceBetween(myLoc.latitude, myLoc.longitude, buddy.lat, buddy.lon, res)
-                        res[0]
-                    } else 0f
-
-                    if (dist < 70000 || buddy.uid.startsWith("dummy")) {
-                        val marker = Marker(mapView)
-                        marker.position = OsmGeoPoint(buddy.lat, buddy.lon)
-                        marker.title = buddy.name
-                        marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                        marker.setOnMarkerClickListener { _, _ ->
-                            selectedBuddy = buddy
-                            true
-                        }
-                        val rColor = when(buddy.status) {
-                            "Fahrbereit" -> Color.Green
-                            "Laden/Entl." -> Color(0xFFFFA500)
-                            "Pause" -> ThubNeonBlue
-                            else -> Color.Gray
-                        }
-
-                        // Hier war der Fehler: Das korrekte getAvatarMarker ist jetzt unten definiert
-                        coroutineScope.launch {
-                            val iconDrawable = getAvatarMarker(context, buddy.profileImageUrl, rColor)
-                            marker.icon = iconDrawable
-                            mapView.invalidate()
-                        }
-                        mapView.overlays.add(marker)
+                    val marker = Marker(mapView)
+                    marker.position = OsmGeoPoint(buddy.lat, buddy.lon)
+                    marker.title = buddy.name
+                    marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    marker.setOnMarkerClickListener { _, _ ->
+                        selectedBuddy = buddy
+                        true
                     }
+                    val rColor = when(buddy.status) {
+                        "Fahrbereit" -> Color.Green
+                        "Laden/Entl." -> Color(0xFFFFA500)
+                        "Pause" -> ThubNeonBlue
+                        else -> Color.Gray
+                    }
+                    coroutineScope.launch {
+                        val iconDrawable = getAvatarMarker(context, buddy.profileImageUrl, rColor)
+                        marker.icon = iconDrawable
+                        mapView.invalidate()
+                    }
+                    mapView.overlays.add(marker)
                 }
+                mapView.invalidate()
             }
         )
 
-        // THEN: Route-Planung Panel ÜBER der Karte
         if (isRoutePlanningVisible) {
             RoutePlanningPanel(
                 modifier = Modifier
@@ -257,27 +256,31 @@ fun OsmMap(
                     .padding(top = 8.dp),
                 expanded = isRoutePlanningExpanded,
                 onExpandToggle = { isRoutePlanningExpanded = !isRoutePlanningExpanded },
-                onStartChanged = { startInput = it },
-                onDestinationChanged = { destinationInput = it },
-                onWaypointAdded = {
-                    waypoints = waypoints + ""
-                },
+                onStartChanged = { routeViewModel.updateStartPoint(it) },
+                onDestinationChanged = { routeViewModel.updateDestinationPoint(it) },
+                onWaypointAdded = {},
                 onCalculateRoute = {
-                    // TODO: Route berechnen (Phase 3)
-                    isCalculatingRoute = true
-                    // Placeholder für Route-Berechnung
-                    coroutineScope.launch {
-                        kotlinx.coroutines.delay(1000)
-                        isCalculatingRoute = false
-                    }
+                    routeViewModel.calculateRoute()
                 },
-                onMinimize = {
-                    isRoutePlanningExpanded = false
-                },
+                onMinimize = { isRoutePlanningExpanded = false },
                 currentLocation = myLocationOverlay?.myLocation?.let {
                     GeoPoint(it.latitude, it.longitude)
                 }
             )
+
+            if (routeViewModel.isCalculating) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
+                    color = ThubNeonBlue
+                )
+            }
+            if (routeViewModel.errorMessage != null) {
+                Text(
+                    text = routeViewModel.errorMessage!!,
+                    color = Color.Red,
+                    modifier = Modifier.align(Alignment.Center).background(Color.Black).padding(8.dp)
+                )
+            }
         }
 
         FloatingActionButton(
@@ -294,9 +297,8 @@ fun OsmMap(
             containerColor = ThubDarkGray,
             contentColor = ThubNeonBlue
         ) {
-            Icon(Icons.Filled.MyLocation, "Zentrieren & Laden")
+            Icon(Icons.Filled.MyLocation, "Zentrieren")
         }
-
 
         if (selectedBuddy != null) {
             val buddy = selectedBuddy!!
@@ -332,10 +334,21 @@ fun OsmMap(
                             parkingViewModel.reportAmpelStatus(parking.id, status, comment)
                         }
                     },
-                    // HIER LAG DER FEHLER: Die Kommentar-Striche (//) müssen weg!
-                    // Die Klammer '}' muss am Ende stehen.
                     onSubmitReview = { review ->
                         parkingViewModel.submitReview(review)
+                    },
+                    onNavigate = {
+                        parkingViewModel.selectedParking?.let { parking ->
+                            val lat = parking.location.latitude
+                            val lon = parking.location.longitude
+                            val gmmIntentUri = Uri.parse("google.navigation:q=$lat,$lon&mode=d")
+                            val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
+                            mapIntent.setPackage("com.google.android.apps.maps")
+                            try { context.startActivity(mapIntent) } catch (e: Exception) {
+                                val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/maps/dir/?api=1&destination=$lat,$lon"))
+                                context.startActivity(browserIntent)
+                            }
+                        }
                     }
                 )
             }
@@ -343,7 +356,44 @@ fun OsmMap(
     }
 }
 
-// --- DIESE FUNKTION IST DER SCHLÜSSEL - SIE MUSS GANZ UNTEN STEHEN ---
+// === HILFSFUNKTIONEN ===
+
+// DIESE FUNKTION HAT GEFEHLT:
+private fun decodePolyline(encoded: String): List<OsmGeoPoint> {
+    val poly = ArrayList<OsmGeoPoint>()
+    var index = 0
+    val len = encoded.length
+    var lat = 0
+    var lng = 0
+
+    while (index < len) {
+        var b: Int
+        var shift = 0
+        var result = 0
+        do {
+            b = encoded[index++].code - 63
+            result = result or (b and 0x1f shl shift)
+            shift += 5
+        } while (b >= 0x20)
+        val dlat = if (result and 1 != 0) (result shr 1).inv() else result shr 1
+        lat += dlat
+
+        shift = 0
+        result = 0
+        do {
+            b = encoded[index++].code - 63
+            result = result or (b and 0x1f shl shift)
+            shift += 5
+        } while (b >= 0x20)
+        val dlng = if (result and 1 != 0) (result shr 1).inv() else result shr 1
+        lng += dlng
+
+        val p = OsmGeoPoint(lat / 1E5, lng / 1E5)
+        poly.add(p)
+    }
+    return poly
+}
+
 private suspend fun getAvatarMarker(context: Context, url: String, ringColor: Color): Drawable {
     return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val loader = ImageLoader(context)
@@ -374,7 +424,6 @@ private suspend fun getAvatarMarker(context: Context, url: String, ringColor: Co
         paint.strokeWidth = 10f
         canvas.drawOval(rectF, paint)
 
-        // DAS HIER IST DAS RETURN - ES MUSS DA SEIN!
         BitmapDrawable(context.resources, output)
     }
 }

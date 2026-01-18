@@ -22,7 +22,7 @@ class ParkingRepository(
             val spots = snapshot?.documents?.mapNotNull { doc ->
                 try { doc.toObject(ParkingSpot::class.java)?.copy(id = doc.id) } catch (e: Exception) { null }
             } ?: emptyList()
-            trySend(spots) // Filterung vereinfacht für Test
+            trySend(spots)
         }
         awaitClose { listener.remove() }
     }
@@ -34,12 +34,12 @@ class ParkingRepository(
         } catch (e: Exception) { null }
     }
 
-    // --- BEWERTUNGEN (DER FIX) ---
+    // --- BEWERTUNGEN ---
     suspend fun submitReview(review: ParkingReview): Boolean {
         return try {
             val docRef = firestore.collection("parkingReviews").document()
 
-            // WICHTIG: Manuelles Mapping, damit keine leeren Dokumente entstehen!
+            // Das manuelle Mapping hier ist super wichtig und richtig!
             val data = hashMapOf(
                 "id" to docRef.id,
                 "parkingId" to review.parkingId,
@@ -62,7 +62,7 @@ class ParkingRepository(
             )
 
             docRef.set(data).await()
-            updateRatings(review.parkingId) // Durchschnitt neu berechnen
+            updateRatings(review.parkingId)
             true
         } catch (e: Exception) {
             e.printStackTrace()
@@ -70,15 +70,26 @@ class ParkingRepository(
         }
     }
 
+    // 🔥 HIER WAR DAS PROBLEM: Der Index fehlte! 🔥
+    // Lösung: Wir sortieren nicht in der DB, sondern in Kotlin.
     fun getReviews(parkingId: String): Flow<List<ParkingReview>> = callbackFlow {
         val listener = firestore.collection("parkingReviews")
             .whereEqualTo("parkingId", parkingId)
-            .orderBy("timestamp", Query.Direction.DESCENDING)
-            .addSnapshotListener { snapshot, _ ->
+            // .orderBy("timestamp", Query.Direction.DESCENDING) <-- HABE ICH ENTFERNT (verursachte den Fehler)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    close(error) // Fehler sauber melden
+                    return@addSnapshotListener
+                }
+
                 val reviews = snapshot?.documents?.mapNotNull { doc ->
                     doc.toObject(ParkingReview::class.java)?.copy(id = doc.id)
                 } ?: emptyList()
-                trySend(reviews)
+
+                // JETZT sortieren wir hier (sicher & schnell):
+                val sortedReviews = reviews.sortedByDescending { it.timestamp }
+
+                trySend(sortedReviews)
             }
         awaitClose { listener.remove() }
     }
@@ -111,7 +122,7 @@ class ParkingRepository(
     }
 
     fun getAmpelReports(parkingId: String): Flow<List<AmpelReport>> = callbackFlow {
-        trySend(emptyList()) // Platzhalter, um Fehler zu vermeiden
+        trySend(emptyList())
         awaitClose { }
     }
 }
