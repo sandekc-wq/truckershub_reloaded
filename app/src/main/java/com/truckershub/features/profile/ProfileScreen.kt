@@ -6,15 +6,19 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardOptions // <--- WICHTIG: Der hat gefehlt!
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -22,15 +26,20 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.ImageLoader
 import com.google.firebase.auth.FirebaseAuth
@@ -39,9 +48,7 @@ import com.truckershub.R
 import com.truckershub.core.design.TextWhite
 import com.truckershub.core.design.ThubDarkGray
 import com.truckershub.core.design.ThubNeonBlue
-// WICHTIG: Wir nutzen jetzt das zentrale Modell!
 import com.truckershub.core.data.model.User
-import com.truckershub.core.data.model.UserPreferences
 import com.truckershub.core.network.SecureHttpClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -52,26 +59,10 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 // --- HELPER ---
-private fun formatDate(timestamp: Long): String {
-    return if (timestamp > 0) {
-        val sdf = SimpleDateFormat("MMM yyyy", Locale.GERMAN)
-        sdf.format(Date(timestamp))
-    } else {
-        "Unbekannt"
-    }
-}
-
 private const val UPLOAD_URL = "https://inetfacts.de/thub_api/upload_thub.php"
 private const val SECRET_KEY = "LKW_V8_POWER"
-
-// ================================================================
-// HILFSFUNKTIONEN (Bitmap, UI Components)
-// ================================================================
 
 private fun Uri.toScaledBitmap(context: Context): Bitmap {
     val contentResolver = context.contentResolver
@@ -83,83 +74,60 @@ private fun Uri.toScaledBitmap(context: Context): Bitmap {
     return contentResolver.openInputStream(this)?.use { stream -> BitmapFactory.decodeStream(stream, null, finalOptions) } ?: throw Exception("Bild Fehler")
 }
 
-@Composable
-fun StatusButton(icon: ImageVector, text: String, color: Color, isSelected: Boolean, onClick: () -> Unit) {
-    val backgroundColor = if (isSelected) color else ThubDarkGray
-    val contentColor = if (isSelected) Color.Black else color
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).background(backgroundColor).padding(8.dp).width(70.dp)) {
-        Icon(imageVector = icon, contentDescription = text, tint = contentColor, modifier = Modifier.size(24.dp))
-        Text(text = text, color = contentColor, style = MaterialTheme.typography.labelSmall, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
-    }
-}
+// ================================================================
+// DESIGN COMPONENTS
+// ================================================================
 
 @Composable
-fun SectionHeader(title: String) {
-    Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-        Text(text = title, color = ThubNeonBlue, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-    }
-}
+fun StatusButtonBig(icon: ImageVector, text: String, color: Color, isSelected: Boolean, onClick: () -> Unit) {
+    val backgroundColor = if (isSelected) color else Color(0xFF1E1E1E)
+    val contentColor = if (isSelected) Color.Black else TextWhite.copy(alpha = 0.7f)
+    val borderStroke = if (isSelected) null else androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.5f))
 
-@Composable
-fun ThubToggleSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, label: String, description: String? = null) {
-    Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(ThubDarkGray.copy(alpha = 0.3f)).padding(16.dp, 12.dp).clickable { onCheckedChange(!checked) }, horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(text = label, color = TextWhite, fontWeight = FontWeight.Medium)
-            if (description != null) Text(text = description, color = TextWhite.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
-        }
-        Switch(checked = checked, onCheckedChange = onCheckedChange, colors = SwitchDefaults.colors(checkedThumbColor = ThubNeonBlue, checkedTrackColor = ThubNeonBlue.copy(alpha = 0.5f)))
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun ThubDropdown(label: String, selectedValue: String, options: List<String>, onValueChange: (String) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
-        OutlinedTextField(value = selectedValue, onValueChange = {}, readOnly = true, label = { Text(label, color = ThubNeonBlue) }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = ThubNeonBlue, unfocusedBorderColor = Color.Gray, focusedTextColor = TextWhite, unfocusedTextColor = TextWhite), modifier = Modifier.fillMaxWidth().menuAnchor())
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.background(ThubDarkGray)) {
-            options.forEach { opt -> DropdownMenuItem(text = { Text(opt, color = TextWhite) }, onClick = { onValueChange(opt); expanded = false }) }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = backgroundColor),
+        border = borderStroke,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .width(105.dp)
+            .height(90.dp)
+            .clickable(onClick = onClick) // Compose Click Handler
+            .shadow(if (isSelected) 10.dp else 0.dp, RoundedCornerShape(16.dp), spotColor = color)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(imageVector = icon, contentDescription = text, tint = contentColor, modifier = Modifier.size(32.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(text = text, color = contentColor, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
         }
     }
 }
 
 @Composable
-fun StatisticItem(icon: ImageVector, label: String, value: String, color: Color) {
-    Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(ThubDarkGray.copy(alpha = 0.3f)).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(imageVector = icon, contentDescription = null, tint = color, modifier = Modifier.size(28.dp))
-        Spacer(modifier = Modifier.width(12.dp))
+fun ThubStatRow(icon: ImageVector, label: String, value: String, color: Color) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .background(Color(0xFF1A1A1A), RoundedCornerShape(12.dp))
+            .border(1.dp, ThubDarkGray, RoundedCornerShape(12.dp))
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, null, tint = color, modifier = Modifier.size(28.dp))
+        Spacer(modifier = Modifier.width(16.dp))
         Column {
-            Text(text = label, color = TextWhite.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
-            Text(text = value, color = TextWhite, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
-fun ReadOnlyField(label: String, value: String) {
-    OutlinedTextField(value = value, onValueChange = {}, label = { Text(label) }, enabled = false, leadingIcon = { Icon(Icons.Filled.Lock, contentDescription = null, tint = Color.Gray) }, colors = OutlinedTextFieldDefaults.colors(disabledTextColor = TextWhite, disabledBorderColor = Color.Gray), modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp))
-}
-
-@Composable
-fun ThubProfileTextField(value: String, onValueChange: (String) -> Unit, label: String, singleLine: Boolean = true, keyboardType: KeyboardType = KeyboardType.Text) {
-    OutlinedTextField(value = value, onValueChange = onValueChange, label = { Text(label, color = ThubNeonBlue) }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = ThubNeonBlue, unfocusedBorderColor = Color.Gray, focusedTextColor = TextWhite, unfocusedTextColor = TextWhite, cursorColor = ThubNeonBlue), modifier = Modifier.fillMaxWidth(), singleLine = singleLine, maxLines = if (singleLine) 1 else 3, keyboardOptions = KeyboardOptions(keyboardType = keyboardType))
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun TrailerDropdown(selectedValue: String, onValueChange: (String) -> Unit) {
-    val trailerOptions = listOf("Planenauflieger", "Kofferauflieger", "Tankwagen", "Kipper", "Autotransporter", "Schwerlast", "Container")
-    var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
-        OutlinedTextField(value = selectedValue, onValueChange = {}, readOnly = true, label = { Text("Auflieger / Aufbau", color = ThubNeonBlue) }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = ThubNeonBlue, unfocusedBorderColor = Color.Gray, focusedTextColor = TextWhite, unfocusedTextColor = TextWhite), modifier = Modifier.fillMaxWidth().menuAnchor())
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            trailerOptions.forEach { opt -> DropdownMenuItem(text = { Text(opt) }, onClick = { onValueChange(opt); expanded = false }) }
+            Text(label, color = Color.Gray, fontSize = 12.sp)
+            Text(value, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
         }
     }
 }
 
 // ================================================================
-// HAUPT-SCREEN
+// MAIN SCREEN
 // ================================================================
 
 @Composable
@@ -168,41 +136,43 @@ fun ProfileScreen(
     firestore: FirebaseFirestore = FirebaseFirestore.getInstance(),
     auth: FirebaseAuth = FirebaseAuth.getInstance()
 ) {
-    val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
     val userId = auth.currentUser?.uid
+    var currentUser by remember { mutableStateOf<User?>(null) }
+    var isEditing by remember { mutableStateOf(false) }
 
-    // Image Loader
-    val imageLoader = remember {
-        ImageLoader.Builder(context)
-            .okHttpClient { SecureHttpClient.createImageLoadingClient(context) }
-            .crossfade(true)
-            .build()
+    LaunchedEffect(userId) {
+        if (userId != null) {
+            firestore.collection("users").document(userId).addSnapshotListener { document, _ ->
+                if (document != null && document.exists()) currentUser = document.toObject(User::class.java)
+            }
+        }
     }
 
-    // STATE: Wir nutzen jetzt die Klasse "User" aus Users.kt
-    var currentUser by remember { mutableStateOf<User?>(null) }
+    if (isEditing) {
+        // userId wird hier mit übergeben, damit wir sicher speichern können
+        ProfileEditScreen(user = currentUser, userId = userId, onBack = { isEditing = false }, onSave = { isEditing = false })
+    } else {
+        ProfileViewScreen(user = currentUser, userId = userId, onBackClick = onBackClick, onEditClick = { isEditing = true }, firestore = firestore)
+    }
+}
 
-    // Lokale Kopien für Editier-Felder
-    var funkName by remember { mutableStateOf("") }
-    var company by remember { mutableStateOf("") }
-    var truckBrand by remember { mutableStateOf("") }
-    var trailerType by remember { mutableStateOf("") }
-    var bio by remember { mutableStateOf("") }
-    var currentStatus by remember { mutableStateOf("Fahrbereit") }
-    var truckLength by remember { mutableStateOf("") }
-    var truckType by remember { mutableStateOf("") }
-    var profileImageUrl by remember { mutableStateOf("") }
+// ================================================================
+// VIEW MODE (Absturz gefixt!)
+// ================================================================
 
-    // Einstellungen (aus Preferences)
-    var shareLocation by remember { mutableStateOf(false) }
-    var language by remember { mutableStateOf("de") }
-    var darkMode by remember { mutableStateOf(false) }
-    var notificationsEnabled by remember { mutableStateOf(true) }
+@Composable
+fun ProfileViewScreen(
+    user: User?,
+    userId: String?, // <--- NEU: Die sichere ID vom Auth
+    onBackClick: () -> Unit,
+    onEditClick: () -> Unit,
+    firestore: FirebaseFirestore
+) {
+    val context = LocalContext.current
+    val imageLoader = remember { ImageLoader.Builder(context).okHttpClient { SecureHttpClient.createImageLoadingClient(context) }.crossfade(true).build() }
 
-    var isUploading by remember { mutableStateOf(false) }
-
+    val funkName = user?.funkName?.ifBlank { "Unbekannt" } ?: "Laden..."
+    val currentStatus = user?.status ?: "Fahrbereit"
     val statusColor = when (currentStatus) {
         "Fahrbereit" -> Color.Green
         "Laden/Entl." -> Color(0xFFFFA500)
@@ -210,182 +180,278 @@ fun ProfileScreen(
         else -> ThubNeonBlue
     }
 
-    // --- DATEN LADEN ---
-    LaunchedEffect(userId) {
+    // FIX: Wir nutzen jetzt 'userId' statt 'user.id' für das Update
+    fun updateStatus(newStatus: String) {
         if (userId != null) {
-            firestore.collection("users").document(userId).addSnapshotListener { document, _ ->
-                if (document != null && document.exists()) {
-                    // Hier wird der "offizielle" User geladen
-                    val user = document.toObject(User::class.java)
-                    currentUser = user
-                    user?.let {
-                        funkName = it.funkName
-                        company = it.company
-                        truckBrand = it.truckBrand
-                        trailerType = it.trailerType
-                        bio = it.bio
-                        currentStatus = it.status
-                        profileImageUrl = it.profileImageUrl
-                        truckLength = it.truckLength
-                        truckType = it.truckType
+            firestore.collection("users").document(userId).update("status", newStatus)
+            // Optional: Kleiner Log oder Toast hier
+        }
+    }
 
-                        // Hier greifen wir in die "Schublade" preferences
-                        shareLocation = it.preferences.shareLocation
-                        language = it.preferences.language
-                        darkMode = it.preferences.darkMode
-                        notificationsEnabled = it.preferences.notifications
+    Box(modifier = Modifier.fillMaxSize()) {
+        Image(painter = painterResource(id = R.drawable.thub_background), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(8.dp))
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)))
+
+        Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+
+            // Header
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
+                IconButton(onClick = onBackClick) { Icon(Icons.Filled.ArrowBack, contentDescription = "Zurück", tint = TextWhite) }
+                Spacer(modifier = Modifier.weight(1f))
+                Text("MEIN PROFIL", color = ThubNeonBlue, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.size(48.dp))
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // PROFIL KARTE
+            Box(contentAlignment = Alignment.TopCenter) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF151515)),
+                    shape = RoundedCornerShape(24.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 50.dp).border(1.dp, ThubNeonBlue.copy(alpha = 0.3f), RoundedCornerShape(24.dp))
+                ) {
+                    Column(modifier = Modifier.padding(top = 60.dp, start = 16.dp, end = 16.dp, bottom = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(funkName, style = MaterialTheme.typography.headlineMedium, color = ThubNeonBlue, fontWeight = FontWeight.Black)
+                        Text(user?.company ?: "Keine Firma", color = Color.Gray, fontSize = 14.sp)
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(modifier = Modifier.background(ThubDarkGray.copy(alpha = 0.5f), RoundedCornerShape(50)).padding(horizontal = 12.dp, vertical = 6.dp)) {
+                            Icon(Icons.Filled.LocalShipping, null, tint = TextWhite, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("${user?.truckBrand ?: "-"} • ${user?.trailerType ?: "-"}", color = TextWhite, fontSize = 14.sp)
+                        }
                     }
                 }
+                AsyncImage(
+                    model = user?.profileImageUrl?.ifEmpty { R.drawable.thub_background }, imageLoader = imageLoader, contentDescription = null, contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(100.dp).clip(CircleShape).border(3.dp, statusColor, CircleShape)
+                )
             }
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // STATUS BUTTONS
+            Text("AKTUELLER STATUS", color = ThubNeonBlue, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Start))
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                StatusButtonBig(Icons.Filled.DriveEta, "Fahrbereit", Color.Green, currentStatus == "Fahrbereit") { updateStatus("Fahrbereit") }
+                StatusButtonBig(Icons.Filled.Work, "Laden/Entl.", Color(0xFFFFA500), currentStatus == "Laden/Entl.") { updateStatus("Laden/Entl.") }
+                StatusButtonBig(Icons.Filled.Coffee, "Pause", ThubNeonBlue, currentStatus == "Pause") { updateStatus("Pause") }
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // STATS
+            Text("MEINE STATISTIKEN 📊", color = ThubNeonBlue, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Start))
+            Spacer(modifier = Modifier.height(12.dp))
+            ThubStatRow(Icons.Filled.LocalParking, "Parkplätze genutzt", (user?.stats?.totalParkings ?: 0).toString(), Color(0xFFFFA500))
+            ThubStatRow(Icons.Filled.Star, "Bewertungen abgegeben", (user?.stats?.totalRatings ?: 0).toString(), Color.Yellow)
+            ThubStatRow(Icons.Filled.Group, "Freunde", (user?.stats?.totalFriends ?: 0).toString(), ThubNeonBlue)
+            ThubStatRow(Icons.Filled.Traffic, "Ampel-Updates", (user?.stats?.ampelUpdates ?: 0).toString(), Color.Green)
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Button(
+                onClick = onEditClick,
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = ThubNeonBlue),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Filled.Edit, null, tint = Color.Black)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Profil & Einstellungen bearbeiten", color = Color.Black, fontWeight = FontWeight.Bold)
+            }
+            Spacer(modifier = Modifier.height(32.dp))
         }
     }
+}
 
-    // --- SPEICHERN ---
-    val saveChanges: () -> Unit = {
-        if (userId != null && currentUser != null) {
-            // Wir aktualisieren das Haupt-Objekt UND die Unter-Objekte
-            val updatedPreferences = currentUser!!.preferences.copy(
-                shareLocation = shareLocation,
-                language = language,
-                notifications = notificationsEnabled,
-                darkMode = darkMode
-            )
+// ================================================================
+// EDIT MODE
+// ================================================================
 
-            val updatedUser = currentUser!!.copy(
-                funkName = funkName,
-                company = company,
-                truckBrand = truckBrand,
-                trailerType = trailerType,
-                bio = bio,
-                status = currentStatus,
-                truckLength = truckLength,
-                truckType = truckType,
-                profileImageUrl = profileImageUrl.ifEmpty { currentUser!!.profileImageUrl },
-                preferences = updatedPreferences
-                // Stats fassen wir beim Speichern NICHT an, die werden woanders hochgezählt!
-            )
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ProfileEditScreen(
+    user: User?,
+    userId: String?, // Auch hier: Sichere ID nutzen
+    onBack: () -> Unit,
+    onSave: () -> Unit
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val firestore = FirebaseFirestore.getInstance()
+    val snackbarHostState = remember { SnackbarHostState() }
 
-            firestore.collection("users").document(userId).set(updatedUser)
-                .addOnSuccessListener {
-                    coroutineScope.launch { snackbarHostState.showSnackbar("Profil gespeichert! ✅") }
-                }
-                .addOnFailureListener { e ->
-                    coroutineScope.launch { snackbarHostState.showSnackbar("Fehler: ${e.message} ❌") }
-                }
-        }
-    }
+    // States
+    var funkName by remember { mutableStateOf(user?.funkName ?: "") }
+    var company by remember { mutableStateOf(user?.company ?: "") }
+    var truckBrand by remember { mutableStateOf(user?.truckBrand ?: "") }
+    var trailerType by remember { mutableStateOf(user?.trailerType ?: "Planenauflieger") }
+    var bio by remember { mutableStateOf(user?.bio ?: "") }
+    var truckLength by remember { mutableStateOf(user?.truckLength ?: "") }
+    var truckType by remember { mutableStateOf(user?.truckType ?: "") }
 
-    // --- UPLOAD ---
-    val imagePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+    // Einstellungen
+    var shareLocation by remember { mutableStateOf(user?.preferences?.shareLocation ?: false) }
+    var notificationsEnabled by remember { mutableStateOf(user?.preferences?.notifications ?: true) }
+    var darkMode by remember { mutableStateOf(user?.preferences?.darkMode ?: false) }
+    var language by remember { mutableStateOf(user?.preferences?.language ?: "de") }
+
+    var profileImageUrl by remember { mutableStateOf(user?.profileImageUrl ?: "") }
+    var isUploading by remember { mutableStateOf(false) }
+
+    val imagePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
             coroutineScope.launch {
                 isUploading = true
                 withContext(Dispatchers.IO) {
                     try {
                         val bitmap = it.toScaledBitmap(context)
-                        val outputStream = ByteArrayOutputStream()
-                        bitmap.compress(Bitmap.CompressFormat.JPEG, 80, outputStream)
-                        val imageBytes = outputStream.toByteArray()
+                        val outputStream = ByteArrayOutputStream(); bitmap.compress(Bitmap.CompressFormat.JPEG, 80, outputStream)
                         val client = SecureHttpClient.createSecureClient(context, true)
-                        val requestBody = MultipartBody.Builder().setType(MultipartBody.FORM).addFormDataPart("key", SECRET_KEY).addFormDataPart("image", "profile_${userId ?: "u"}.jpg", imageBytes.toRequestBody("image/jpeg".toMediaTypeOrNull())).build()
+                        val requestBody = MultipartBody.Builder().setType(MultipartBody.FORM).addFormDataPart("key", SECRET_KEY).addFormDataPart("image", "profile_${userId}.jpg", outputStream.toByteArray().toRequestBody("image/jpeg".toMediaTypeOrNull())).build()
                         val request = Request.Builder().url(UPLOAD_URL).post(requestBody).build()
-                        val response = client.newCall(request).execute()
-                        val json = JSONObject(response.body?.string() ?: "")
-                        if (json.getString("status") == "success") {
-                            val newUrl = json.getString("url")
-                            if (userId != null) firestore.collection("users").document(userId).update("profileImageUrl", newUrl)
-                        } else throw Exception(json.getString("message"))
-                    } catch (e: Exception) {
-                        coroutineScope.launch { snackbarHostState.showSnackbar("Upload Fehler: ${e.message}") }
-                    } finally { isUploading = false }
+                        val json = JSONObject(client.newCall(request).execute().body?.string() ?: "")
+                        if (json.getString("status") == "success") profileImageUrl = json.getString("url")
+                    } catch (e: Exception) { /* Err */ } finally { isUploading = false }
                 }
             }
         }
     }
 
-    // --- UI ---
-    Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { paddingValues ->
-        Box(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
-            Image(painter = painterResource(id = R.drawable.thub_background), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.85f)))
+    Scaffold(containerColor = Color.Black, snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
+        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
 
-            Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("MEIN PROFIL", style = MaterialTheme.typography.headlineMedium, color = ThubNeonBlue, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(24.dp))
+            Text("PROFIL EDITIEREN", color = ThubNeonBlue, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(24.dp))
 
-                Box(contentAlignment = Alignment.Center) {
-                    AsyncImage(
-                        model = profileImageUrl.ifEmpty { R.drawable.thub_background },
-                        imageLoader = imageLoader,
-                        contentDescription = "Profilbild",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(120.dp).clip(CircleShape).border(3.dp, statusColor, CircleShape).clickable(enabled = !isUploading) { imagePickerLauncher.launch("image/*") }
-                    )
-                    if (isUploading) CircularProgressIndicator(color = ThubNeonBlue)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box {
+                    AsyncImage(model = profileImageUrl.ifEmpty { R.drawable.thub_background }, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(80.dp).clip(CircleShape).border(2.dp, ThubNeonBlue, CircleShape).clickable { imagePickerLauncher.launch("image/*") })
+                    if (isUploading) CircularProgressIndicator(modifier = Modifier.size(30.dp), color = ThubNeonBlue)
                 }
-
-                Spacer(modifier = Modifier.height(16.dp))
-                // Hier greifen wir auf die Root-Felder zu
-                Text(text = "${currentUser?.firstName ?: ""} ${currentUser?.lastName ?: ""}", style = MaterialTheme.typography.titleLarge, color = TextWhite, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(24.dp))
-
-                SectionHeader("AKTUELLER STATUS")
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    StatusButton(Icons.Filled.DriveEta, "Fahrbereit", Color.Green, currentStatus == "Fahrbereit") { currentStatus = "Fahrbereit" }
-                    StatusButton(Icons.Filled.Work, "Laden/Entl.", Color(0xFFFFA500), currentStatus == "Laden/Entl.") { currentStatus = "Laden/Entl." }
-                    StatusButton(Icons.Filled.Coffee, "Pause", ThubNeonBlue, currentStatus == "Pause") { currentStatus = "Pause" }
-                }
-                Spacer(modifier = Modifier.height(24.dp))
-
-                SectionHeader("IDENTITÄT")
-                ReadOnlyField("Vorname", currentUser?.firstName ?: "")
-                ReadOnlyField("Nachname", currentUser?.lastName ?: "")
-                Spacer(modifier = Modifier.height(24.dp))
-
-                SectionHeader("MEIN RIGG & ICH 🛠️")
-                ThubProfileTextField(funkName, { funkName = it }, "Funkname")
-                Spacer(modifier = Modifier.height(8.dp))
-                ThubProfileTextField(company, { company = it }, "Firma")
-                Spacer(modifier = Modifier.height(16.dp))
-                TrailerDropdown(trailerType) { trailerType = it }
-                Spacer(modifier = Modifier.height(8.dp))
-                ThubProfileTextField(bio, { bio = it }, "Über mich", singleLine = false)
-                Spacer(modifier = Modifier.height(24.dp))
-
-                SectionHeader("MEIN TRUCK 🚚")
-                ThubProfileTextField(truckLength, { truckLength = it }, "LKW Gesamtlänge (m)", keyboardType = KeyboardType.Number)
-                Spacer(modifier = Modifier.height(8.dp))
-                ThubProfileTextField(truckType, { truckType = it }, "LKW Typ (z.B. Sattelzug)")
-                Spacer(modifier = Modifier.height(24.dp))
-
-                SectionHeader("EINSTELLUNGEN ⚙️")
-                ThubDropdown("Sprache / Language", if (language == "de") "Deutsch" else "English", listOf("Deutsch", "English")) { language = if (it == "Deutsch") "de" else "en" }
-                Spacer(modifier = Modifier.height(8.dp))
-                ThubToggleSwitch(shareLocation, { shareLocation = it }, "Standort freigeben", "Zeige deinen Standort Freunden auf der Karte")
-                Spacer(modifier = Modifier.height(8.dp))
-                ThubToggleSwitch(notificationsEnabled, { notificationsEnabled = it }, "Benachrichtigungen", "Erhalte Toast-Nachrichten")
-                Spacer(modifier = Modifier.height(8.dp))
-                ThubToggleSwitch(darkMode, { darkMode = it }, "Dunkler Modus", "Nutze dunkles Theme")
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // STATISTIKEN - JETZT AUS DER SCHUBLADE "STATS" 📊
-                SectionHeader("MEINE STATISTIKEN 📊")
-                StatisticItem(Icons.Filled.LocalParking, "Parkplätze genutzt", (currentUser?.stats?.totalParkings ?: 0).toString(), Color(0xFFFFA500))
-                Spacer(modifier = Modifier.height(8.dp))
-                StatisticItem(Icons.Filled.Star, "Bewertungen abgegeben", (currentUser?.stats?.totalRatings ?: 0).toString(), Color.Yellow)
-                Spacer(modifier = Modifier.height(8.dp))
-                StatisticItem(Icons.Filled.Group, "Freunde", (currentUser?.stats?.totalFriends ?: 0).toString(), ThubNeonBlue)
-                Spacer(modifier = Modifier.height(8.dp))
-                StatisticItem(Icons.Filled.Streetview, "Ampel-Updates", (currentUser?.stats?.ampelUpdates ?: 0).toString(), Color.Green)
-                Spacer(modifier = Modifier.height(8.dp))
-                StatisticItem(Icons.Filled.Cake, "Mitglied seit", formatDate(currentUser?.createdAt ?: 0), Color(0xFFFF1493))
-                Spacer(modifier = Modifier.height(32.dp))
-
-                Button(onClick = saveChanges, modifier = Modifier.fillMaxWidth().height(56.dp), colors = ButtonDefaults.buttonColors(containerColor = ThubNeonBlue), shape = RoundedCornerShape(12.dp)) {
-                    Text("Änderungen speichern", fontWeight = FontWeight.Bold, color = Color.Black)
-                }
-                Spacer(modifier = Modifier.height(48.dp))
+                Spacer(modifier = Modifier.width(16.dp))
+                Text("Tippe für neues Bild", color = Color.Gray)
             }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Text("IDENTITÄT", color = ThubNeonBlue, fontWeight = FontWeight.Bold)
+            OutlinedTextField(value = user?.firstName ?: "", onValueChange = {}, enabled = false, label = { Text("Vorname") }, colors = OutlinedTextFieldDefaults.colors(disabledTextColor = Color.Gray, disabledBorderColor = ThubDarkGray), modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(value = user?.lastName ?: "", onValueChange = {}, enabled = false, label = { Text("Nachname") }, colors = OutlinedTextFieldDefaults.colors(disabledTextColor = Color.Gray, disabledBorderColor = ThubDarkGray), modifier = Modifier.fillMaxWidth())
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            ThubEditField(funkName, { funkName = it }, "Funkname")
+            ThubEditField(company, { company = it }, "Firma")
+            ThubEditField(bio, { bio = it }, "Über mich", singleLine = false)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text("MEIN TRUCK 🚛", color = ThubNeonBlue, fontWeight = FontWeight.Bold)
+            ThubEditField(truckBrand, { truckBrand = it }, "LKW Marke")
+
+            var expanded by remember { mutableStateOf(false) }
+            val options = listOf("Planenauflieger", "Kofferauflieger", "Tankwagen", "Kipper", "Autotransporter", "Sattel", "Schwerlast")
+            ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
+                OutlinedTextField(
+                    value = trailerType, onValueChange = {}, readOnly = true, label = { Text("Auflieger / Aufbau", color = ThubNeonBlue) },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = ThubNeonBlue, unfocusedBorderColor = Color.Gray, focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+                    modifier = Modifier.fillMaxWidth().menuAnchor()
+                )
+                ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    options.forEach { opt -> DropdownMenuItem(text = { Text(opt) }, onClick = { trailerType = opt; expanded = false }) }
+                }
+            }
+
+            // FIX: Hier der korrekte Aufruf für Nummernblock
+            ThubEditField(truckLength, { truckLength = it }, "LKW Gesamtlänge (m)", keyboardType = KeyboardType.Number)
+            ThubEditField(truckType, { truckType = it }, "LKW Typ (z.B. Sattelzug)")
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text("EINSTELLUNGEN ⚙️", color = ThubNeonBlue, fontWeight = FontWeight.Bold)
+
+            var langExpanded by remember { mutableStateOf(false) }
+            ExposedDropdownMenuBox(expanded = langExpanded, onExpandedChange = { langExpanded = !langExpanded }) {
+                OutlinedTextField(
+                    value = if(language == "de") "Deutsch" else "English", onValueChange = {}, readOnly = true, label = { Text("Sprache / Language", color = ThubNeonBlue) },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = langExpanded) },
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = ThubNeonBlue, unfocusedBorderColor = Color.Gray, focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+                    modifier = Modifier.fillMaxWidth().menuAnchor()
+                )
+                ExposedDropdownMenu(expanded = langExpanded, onDismissRequest = { langExpanded = false }) {
+                    DropdownMenuItem(text = { Text("Deutsch") }, onClick = { language = "de"; langExpanded = false })
+                    DropdownMenuItem(text = { Text("English") }, onClick = { language = "en"; langExpanded = false })
+                }
+            }
+
+            ThubSwitch(shareLocation, { shareLocation = it }, "Standort freigeben", "Zeige deinen Standort Freunden auf der Karte")
+            ThubSwitch(notificationsEnabled, { notificationsEnabled = it }, "Benachrichtigungen", "Erhalte Toast-Nachrichten")
+            ThubSwitch(darkMode, { darkMode = it }, "Dunkler Modus", "Nutze dunkles Theme")
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Button(
+                onClick = {
+                    if (userId != null) {
+                        // FIX: Wir nutzen 'userId' statt 'user.id'
+                        val safeUser = user?.copy() // Wenn user existiert, Kopie machen
+                        val updatedPrefs = safeUser?.preferences?.copy(shareLocation = shareLocation, notifications = notificationsEnabled, darkMode = darkMode, language = language)
+
+                        // Wenn safeUser null ist, erstellen wir zur Not ein dummy objekt damit es nicht crasht, aber eigentlich sollte user da sein.
+                        // Sicherer Weg: Update via Map für bestehende User
+                        val updates = hashMapOf<String, Any>(
+                            "funkName" to funkName, "company" to company, "truckBrand" to truckBrand,
+                            "trailerType" to trailerType, "bio" to bio, "truckLength" to truckLength,
+                            "truckType" to truckType, "profileImageUrl" to profileImageUrl,
+                            "preferences.shareLocation" to shareLocation,
+                            "preferences.notifications" to notificationsEnabled,
+                            "preferences.darkMode" to darkMode,
+                            "preferences.language" to language
+                        )
+                        firestore.collection("users").document(userId).update(updates).addOnSuccessListener { onSave() }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = ThubNeonBlue),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Änderungen speichern", color = Color.Black, fontWeight = FontWeight.Bold)
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            TextButton(onClick = onBack, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Abbrechen", color = Color.Gray) }
+            Spacer(modifier = Modifier.height(48.dp))
         }
+    }
+}
+
+@Composable
+fun ThubEditField(value: String, onValueChange: (String) -> Unit, label: String, singleLine: Boolean = true, keyboardType: KeyboardType = KeyboardType.Text) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label, color = ThubNeonBlue) },
+        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = ThubNeonBlue, unfocusedBorderColor = Color.Gray, focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        singleLine = singleLine,
+        maxLines = if(singleLine) 1 else 3,
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType) // <--- Hier nutzen wir jetzt den korrekten Parameter
+    )
+}
+
+@Composable
+fun ThubSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, label: String, subLabel: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, color = TextWhite, fontWeight = FontWeight.Bold)
+            Text(subLabel, color = Color.Gray, fontSize = 12.sp)
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange, colors = SwitchDefaults.colors(checkedThumbColor = ThubNeonBlue, checkedTrackColor = ThubNeonBlue.copy(alpha = 0.5f)))
     }
 }
