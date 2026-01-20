@@ -16,12 +16,15 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddLocationAlt
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -52,6 +55,8 @@ import com.truckershub.features.parking.ParkingViewModel
 import com.truckershub.features.parking.components.ParkingMarkerHelper
 import com.truckershub.features.navigation.RouteViewModel
 import com.truckershub.features.navigation.components.RoutePlanningPanel
+// IMPORT FÜR DEN NEUEN DIALOG
+import com.truckershub.features.map.AddLocationDialog
 import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -94,6 +99,12 @@ fun OsmMap(
     val parkingSpots = parkingViewModel.parkingSpots
     var showParkingDetail by remember { mutableStateOf(false) }
     var hasLoadedInitialParkingSpots by remember { mutableStateOf(false) }
+
+    // NEUE STATES FÜR DAS MELDEN
+    var showAddDialog by remember { mutableStateOf(false) }
+    var clickedPoint by remember { mutableStateOf<OsmGeoPoint?>(null) }
+    // Wir brauchen Zugriff auf die MapView Instanz
+    var myMapView by remember { mutableStateOf<MapView?>(null) }
 
     // Route-Planung UI States
     var isRoutePlanningVisible by remember { mutableStateOf(true) }
@@ -182,6 +193,7 @@ fun OsmMap(
                     this.overlays.add(locationOverlay)
                     myLocationOverlay = locationOverlay
 
+                    // DARK MODE MAGIC ✨
                     if (isNightMode) {
                         val matrix = android.graphics.ColorMatrix()
                         matrix.setSaturation(0f)
@@ -194,6 +206,8 @@ fun OsmMap(
                 }
             },
             update = { mapView ->
+                myMapView = mapView // Instanz merken!
+
                 mapView.overlays.removeIf { it is Marker && it.id != "MY_LOC" && it.id != "ROUTE_START" && it.id != "ROUTE_END" }
                 mapView.overlays.removeIf { it is Polyline }
 
@@ -201,8 +215,6 @@ fun OsmMap(
                 val route = routeViewModel.currentRoute
                 if (route != null) {
                     val encodedString = route.routeDetails.points
-
-                    // KORREKTUR: Wir nutzen die eigene Funktion am Ende der Datei
                     val points = decodePolyline(encodedString)
 
                     val polyline = Polyline()
@@ -249,6 +261,14 @@ fun OsmMap(
             }
         )
 
+        // DAS ROTE FADENKREUZ (Mitte) 🎯
+        Icon(
+            Icons.Filled.Add,
+            contentDescription = "Zielmitte",
+            tint = Color.Red.copy(alpha = 0.8f),
+            modifier = Modifier.align(Alignment.Center).size(48.dp)
+        )
+
         if (isRoutePlanningVisible) {
             RoutePlanningPanel(
                 modifier = Modifier
@@ -283,22 +303,52 @@ fun OsmMap(
             }
         }
 
-        FloatingActionButton(
-            onClick = {
-                myLocationOverlay?.enableFollowLocation()
-                val loc = myLocationOverlay?.myLocation
-                if (loc != null) {
-                    mapController?.animateTo(loc)
-                    val searchPoint = com.google.firebase.firestore.GeoPoint(loc.latitude, loc.longitude)
-                    parkingViewModel.loadParkingSpotsNearby(searchPoint, 50.0)
-                }
-            },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 16.dp, end = 16.dp),
-            containerColor = ThubDarkGray,
-            contentColor = ThubNeonBlue
+        // BUTTON-STACK UNTEN RECHTS (Melden + Zentrieren)
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(bottom = 16.dp, end = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Icon(Icons.Filled.MyLocation, "Zentrieren")
+
+            // 1. NEUER BUTTON: ORT MELDEN (Rot) 🔴
+            FloatingActionButton(
+                onClick = {
+                    val center = myMapView?.mapCenter
+                    if (center != null && center.latitude != 0.0) {
+                        clickedPoint = OsmGeoPoint(center.latitude, center.longitude)
+                        showAddDialog = true
+                    } else {
+                        Toast.makeText(context, "Karte wird noch geladen...", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                containerColor = Color.Red,
+                contentColor = Color.White
+            ) {
+                Icon(Icons.Filled.AddLocationAlt, "Ort melden")
+            }
+
+            // 2. ALTER BUTTON: ZENTRIEREN (Blau) 🔵
+            FloatingActionButton(
+                onClick = {
+                    myLocationOverlay?.enableFollowLocation()
+                    val loc = myLocationOverlay?.myLocation
+                    if (loc != null) {
+                        mapController?.animateTo(loc)
+                        // Wenn zentriert wird, laden wir auch gleich neue Parkplätze
+                        val searchPoint = GeoPoint(loc.latitude, loc.longitude)
+                        parkingViewModel.loadParkingSpotsNearby(searchPoint, 50.0)
+                    }
+                },
+                containerColor = ThubDarkGray,
+                contentColor = ThubNeonBlue
+            ) {
+                Icon(Icons.Filled.MyLocation, "Zentrieren")
+            }
         }
+
+        // DIALOGS & OVERLAYS
 
         if (selectedBuddy != null) {
             val buddy = selectedBuddy!!
@@ -318,6 +368,21 @@ fun OsmMap(
                     }
                 }
             }
+        }
+
+        // DER NEUE DIALOG ZUM MELDEN
+        if (showAddDialog && clickedPoint != null) {
+            AddLocationDialog(
+                lat = clickedPoint!!.latitude,
+                lng = clickedPoint!!.longitude,
+                onDismiss = { showAddDialog = false },
+                onSave = { name, type, desc ->
+                    println("TruckersHub: Neuer Ort '$name' ($type)")
+                    // Hier später an Firestore anbinden!
+                    showAddDialog = false
+                    Toast.makeText(context, "Danke! '$name' gemeldet. ✅", Toast.LENGTH_LONG).show()
+                }
+            )
         }
 
         if (showParkingDetail && parkingViewModel.selectedParking != null) {
@@ -358,7 +423,6 @@ fun OsmMap(
 
 // === HILFSFUNKTIONEN ===
 
-// DIESE FUNKTION HAT GEFEHLT:
 private fun decodePolyline(encoded: String): List<OsmGeoPoint> {
     val poly = ArrayList<OsmGeoPoint>()
     var index = 0
