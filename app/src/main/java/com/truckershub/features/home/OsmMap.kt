@@ -30,10 +30,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddLocationAlt
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Flag // <--- NEU für Test-Button
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Warning // <--- Für den SOS Button
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -61,8 +61,6 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.GeoPoint
 import com.truckershub.R
-import com.truckershub.core.data.model.CountryInfo
-import com.truckershub.core.data.model.PredefinedCountries // <--- NEU: Für Dummies
 import com.truckershub.core.design.TextWhite
 import com.truckershub.core.design.ThubBlack
 import com.truckershub.core.design.ThubDarkGray
@@ -72,7 +70,9 @@ import com.truckershub.features.parking.ParkingViewModel
 import com.truckershub.features.parking.components.ParkingMarkerHelper
 import com.truckershub.features.navigation.RouteViewModel
 import com.truckershub.features.navigation.components.RoutePlanningPanel
-import com.truckershub.features.navigation.components.BorderAlert // <--- NEU: Dein Toast
+import com.truckershub.features.navigation.components.BorderAlert
+import com.truckershub.features.map.AddLocationDialog
+import com.truckershub.features.map.LocationData
 import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -83,8 +83,6 @@ import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 import java.util.Calendar
-import com.truckershub.features.map.AddLocationDialog
-import com.truckershub.features.map.LocationData
 
 // --- DATENMODELL ---
 data class TruckerBuddy(
@@ -103,7 +101,7 @@ fun OsmMap(
     firestore: FirebaseFirestore = FirebaseFirestore.getInstance(),
     auth: FirebaseAuth = FirebaseAuth.getInstance(),
     onOpenProfile: (String) -> Unit,
-    onOpenEUGuide: () -> Unit = {} // <--- NEU: Callback für den Border-Alarm (optional, damit HS nicht bricht)
+    onOpenEUGuide: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -129,9 +127,16 @@ fun OsmMap(
     var isRoutePlanningVisible by remember { mutableStateOf(true) }
     var isRoutePlanningExpanded by remember { mutableStateOf(false) }
 
-    // BORDER ALERT TEST-STATE 🚧
-    var isBorderTestVisible by remember { mutableStateOf(false) }
-    var currentBorderCountry by remember { mutableStateOf<CountryInfo?>(null) }
+    // --- AUTOMATIK: GRENZ-ÜBERWACHUNG 📡 ---
+    val borderLocation = routeViewModel.borderLocation
+    val nextBorderCountry = routeViewModel.nextBorderCountry
+
+    // UI State für den Alarm
+    var showBorderAlert by remember { mutableStateOf(false) }
+    var distanceToBorder by remember { mutableIntStateOf(0) }
+
+    // --- SOS BUTTON STATE 🚨 ---
+    var showSosDialog by remember { mutableStateOf(false) }
 
     var otherTrucks by remember { mutableStateOf<List<TruckerBuddy>>(emptyList()) }
     var selectedBuddy by remember { mutableStateOf<TruckerBuddy?>(null) }
@@ -185,13 +190,33 @@ fun OsmMap(
                     val geoPoint = GeoPoint(location.latitude, location.longitude)
                     firestore.collection("users").document(userId).update("currentLocation", geoPoint)
                 }
+
+                // === AUTOMATISCHER GRENZ-CHECK 🛰️ ===
+                if (borderLocation != null && nextBorderCountry != null) {
+                    val myLoc = Location("me")
+                    myLoc.latitude = location.latitude
+                    myLoc.longitude = location.longitude
+
+                    val borderLoc = Location("border")
+                    borderLoc.latitude = borderLocation.latitude
+                    borderLoc.longitude = borderLocation.longitude
+
+                    val distMeters = myLoc.distanceTo(borderLoc)
+                    distanceToBorder = (distMeters / 1000).toInt()
+
+                    if (distMeters < 10000) {
+                        showBorderAlert = true
+                    } else {
+                        if (distMeters > 15000) showBorderAlert = false
+                    }
+                }
             }
             override fun onProviderEnabled(provider: String) {}
             override fun onProviderDisabled(provider: String) {}
             override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
         }
         try {
-            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 10000L, 50f, locationListener)
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 2000L, 10f, locationListener)
         } catch (e: SecurityException) {}
         onDispose { locationManager.removeUpdates(locationListener) }
     }
@@ -307,6 +332,8 @@ fun OsmMap(
                 onWaypointAdded = {},
                 onCalculateRoute = { routeViewModel.calculateRoute() },
                 onMinimize = { isRoutePlanningExpanded = false },
+                // HIER IST DIE NEUE LEITUNG: 👇
+                onSosClick = { showSosDialog = true },
                 currentLocation = myLocationOverlay?.myLocation?.let { GeoPoint(it.latitude, it.longitude) }
             )
             if (routeViewModel.isCalculating) {
@@ -321,24 +348,24 @@ fun OsmMap(
             }
         }
 
-        // --- DER NEUE BORDER ALERT TOAST! 🍞🚨 ---
-        // Er schwebt unten in der Mitte
+        // --- BORDER ALERT (Automatisch) ---
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 80.dp) // Platz lassen für Buttons/Nav
+                .padding(bottom = 80.dp)
         ) {
             BorderAlert(
-                country = currentBorderCountry,
-                isVisible = isBorderTestVisible,
-                distanceKm = 5, // Testwert
+                country = nextBorderCountry,
+                isVisible = showBorderAlert,
+                distanceKm = distanceToBorder,
                 onOpenInfo = {
-                    // Schließt den Alarm und öffnet den Guide
-                    isBorderTestVisible = false
+                    showBorderAlert = false
                     onOpenEUGuide()
                 }
             )
         }
+
+
 
         // BUTTONS UNTEN RECHTS
         Column(
@@ -346,23 +373,6 @@ fun OsmMap(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // TEST-BUTTON FÜR GRENZE (NUR FÜR DEV) 🚧
-            FloatingActionButton(
-                onClick = {
-                    if (isBorderTestVisible) {
-                        isBorderTestVisible = false
-                    } else {
-                        // Simuliere Österreich
-                        currentBorderCountry = PredefinedCountries.AUSTRIA
-                        isBorderTestVisible = true
-                    }
-                },
-                containerColor = Color.Yellow,
-                contentColor = Color.Black
-            ) {
-                Icon(Icons.Filled.Flag, "Test Grenze")
-            }
-
             // MELDEN
             FloatingActionButton(
                 onClick = {
@@ -398,7 +408,22 @@ fun OsmMap(
             }
         }
 
-        // === POPUP FÜR BUDDIES ===
+        // --- DIALOGE ---
+
+        // 1. SOS DIALOG
+        if (showSosDialog) {
+            val myLoc = myLocationOverlay?.myLocation
+            val lat = myLoc?.latitude ?: 0.0
+            val lon = myLoc?.longitude ?: 0.0
+
+            EmergencyDialog(
+                currentLat = lat,
+                currentLon = lon,
+                onDismiss = { showSosDialog = false }
+            )
+        }
+
+        // 2. BUDDY POPUP
         if (selectedBuddy != null) {
             val buddy = selectedBuddy!!
             val isMe = buddy.uid == userId
@@ -480,26 +505,21 @@ fun OsmMap(
                             Spacer(modifier = Modifier.height(16.dp))
                         }
 
-                        // HIER IST JETZT DIE MAGIE! 🪄
                         ThubDialogButton(
                             text = "Profil ansehen",
                             icon = Icons.Filled.Person,
                             isSecondary = true,
                             onClick = {
-                                selectedBuddy = null // Dialog schließen
-                                onOpenProfile(buddy.uid) // Das Signal an HomeScreen senden!
+                                selectedBuddy = null
+                                onOpenProfile(buddy.uid)
                             }
                         )
-
-                        if (isMe) {
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text("(Das bist du selbst)", color = Color.Gray, fontSize = 12.sp)
-                        }
                     }
                 }
             }
         }
 
+        // 3. ADD LOCATION DIALOG
         if (showAddDialog && clickedPoint != null) {
             AddLocationDialog(
                 lat = clickedPoint!!.latitude,
@@ -545,6 +565,7 @@ fun OsmMap(
             )
         }
 
+        // 4. PARKING DETAIL
         if (showParkingDetail && parkingViewModel.selectedParking != null) {
             Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)).padding(16.dp)) {
                 ParkingDetailScreen(

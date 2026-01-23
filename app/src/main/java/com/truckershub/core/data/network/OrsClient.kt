@@ -15,15 +15,14 @@ import java.util.concurrent.TimeUnit
 /**
  * OpenRouteService Client (PRO VERSION 🚛)
  * Nutzt den JSON-Endpunkt für fix und fertig codierte Polylines.
+ * Angepasst für das neue RouteInstruction Format.
  */
 class OrsClient {
 
     companion object {
-        // Dein Key (funktioniert ja laut Statistik!)
+        // Dein Key (lass ich so stehen!)
         private const val API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjQxZGJiYjhiMjRhNjQ3YjBhNjFkNDE1MDZmMzUwZjgxIiwiaCI6Im11cm11cjY0In0="
 
-        // WICHTIG: Hier stand vorher ".../geojson". Jetzt nehmen wir ".../json".
-        // Das liefert uns die Geometrie direkt als fertigen String!
         private const val BASE_URL = "https://api.openrouteservice.org/v2/directions/driving-hgv/json"
 
         private val client = OkHttpClient.Builder()
@@ -43,7 +42,6 @@ class OrsClient {
 
             jsonBody.put("coordinates", coordsArray)
             jsonBody.put("instructions", true)
-            // Keine "geometry"-Option nötig, standardmäßig gibt er uns den String!
 
             val requestBody = jsonBody.toString().toRequestBody("application/json".toMediaType())
             val httpRequest = Request.Builder()
@@ -78,7 +76,7 @@ class OrsClient {
             val route = routes.getJSONObject(0)
             val summary = route.optJSONObject("summary")
 
-            // Hier kommt das Goldstück: Die fertige Linie!
+            // Die Geometrie (die blaue Linie)
             val geometryString = route.optString("geometry", "")
 
             val distance = summary?.optDouble("distance", 0.0) ?: 0.0
@@ -91,13 +89,30 @@ class OrsClient {
                 if (steps != null) {
                     for (i in 0 until steps.length()) {
                         val step = steps.getJSONObject(i)
+
+                        // HIER WAR DER FEHLER: Wir passen das jetzt an die neue Klasse an!
+
+                        // Index finden (das ist wichtig für den Grenz-Alarm)
+                        val wayPointsJson = step.optJSONArray("way_points")
+                        val wayPointsList = mutableListOf<Int>()
+                        var firstIndex = 0
+
+                        if (wayPointsJson != null && wayPointsJson.length() > 0) {
+                            // Der erste Punkt sagt uns, WO auf der Linie das passiert
+                            firstIndex = wayPointsJson.optInt(0)
+                            for (k in 0 until wayPointsJson.length()) {
+                                wayPointsList.add(wayPointsJson.optInt(k))
+                            }
+                        }
+
                         instructionsList.add(
                             RouteInstruction(
                                 text = step.optString("instruction", ""),
                                 distance = step.optDouble("distance", 0.0),
-                                time = step.optDouble("duration", 0.0).toLong(),
-                                sign = mapOrsSignToGh(step.optInt("type", 0)),
-                                street_name = step.optString("name", "")
+                                duration = step.optDouble("duration", 0.0), // Jetzt Double!
+                                type = step.optInt("type", 0),              // Direkt den ORS Typ nutzen
+                                index = firstIndex,                         // <--- DAS BRAUCHEN WIR!
+                                wayPoints = wayPointsList
                             )
                         )
                     }
@@ -107,26 +122,17 @@ class OrsClient {
             val path = RoutePath(
                 distance = distance,
                 time = duration * 1000,
-                points = geometryString, // Einfach durchreichen!
-                points_encoded = true,
-                bbox = null,
+                points = geometryString,
+                // encoded_polyline gibt's in deiner RoutePath Klasse evtl nicht,
+                // aber points reicht uns.
                 instructions = instructionsList
             )
 
-            RouteResponse(paths = listOf(path), message = null)
+            RouteResponse(paths = listOf(path))
 
         } catch (e: Exception) {
             e.printStackTrace()
             null
-        }
-    }
-
-    private fun mapOrsSignToGh(orsType: Int): Int {
-        return when (orsType) {
-            0, 1 -> 0 // Links
-            2, 3 -> 1 // Rechts
-            4, 5 -> -1 // Links scharf
-            else -> 0
         }
     }
 }

@@ -16,3 +16,5 @@ val StatusOrange = Color(0xFFFF9100)    // Stau / Problem
 // Textfarben
 val TextWhite = Color(0xFFFFFFFF)
 val TextGray = Color(0xFFB0B0B0)
+// UNSER OFFIZIELLES ALARM-ROT 🚨 (für den SOS Button)
+val ThubRed = Color(0xFFFF2A2A)

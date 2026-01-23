@@ -3,15 +3,19 @@ package com.truckershub.core.data.model
 import androidx.annotation.DrawableRes
 
 /**
- * LAND INFOS
- *
- * Wichtige Informationen für LKW-Fahrer bei Grenzüberquerung
+ * LAND INFOS 🌍🚛
+ * Wichtige Informationen für LKW-Fahrer bei Grenzüberquerung.
+ * Stand: 2025
  */
 data class CountryInfo(
     val id: String = "",                 // Ländercode (z.B. "DE", "AT", "CH")
-    val name: String = "",               // Name ("Deutschland", "Österreich", "Schweiz")
-    val flag: String? = null,            // Flaggen-Emoji oder Ressourcen-ID
-    val callingCode: String = "",        // Vorwahl (+49, +43, +41)
+    val name: String = "",               // Name ("Deutschland", "Österreich")
+    val flag: String? = null,            // Flaggen-Emoji 🇩🇪
+    val callingCode: String = "",        // Vorwahl (+49)
+
+    // TEMPOLIMITS (Neu hinzugefügt für das UI!) 🛑
+    val speedLimitHighway: Int = 80,     // Standard LKW > 3.5t/7.5t
+    val speedLimitCountry: Int = 60,     // Landstraße
 
     // Vignetten- und Maut-Systeme
     val tollSystem: TollSystem = TollSystem.NONE,
@@ -29,47 +33,43 @@ data class CountryInfo(
     val snowChainsRequired: Boolean = false,
     val winterPeriod: WinterPeriod? = null,
 
-    // Öffnungszeiten
-    val truckDrivingBanInfo: String? = null,  // z.B. "Sonntags- und Feiertagsfahrverbot: 0-22 Uhr"
+    // Öffnungszeiten / Fahrverbote
+    val truckDrivingBanInfo: String? = null,
 
     // Kontakt & Notfall
-    val emergencyNumber: String = "112",  // Europaweit standardmäßig 112
-    val truckBreakdownNumber: String? = null,  // Pannenhilfe
+    val emergencyNumber: String = "112",
+    val truckBreakdownNumber: String? = null,
     val policeNumber: String? = null,
 
     // Währungen
     val currency: String = "EUR",
-    val language: String = "de",          // Hauptsprache
+    val language: String = "de",
 
     // Nützliche Infos
     val fuelPrices: FuelPrices? = null,
-    val avgParkingCost: Double? = null,   // Durchschnittliche Parkplatzkosten pro Nacht
+    val avgParkingCost: Double? = null,
 
     // Tipps
-    val tips: List<String> = emptyList(),  // Wichtige Tipps für LKW-Fahrer
-    val commonIssues: List<String> = emptyList()  // Häufige Probleme
+    val tips: List<String> = emptyList(),
+    val commonIssues: List<String> = emptyList()
 )
 
 /**
  * MAUT-SYSTEME
  */
 enum class TollSystem {
-    NONE,           // Keine Maut
-    VIGNETTE,       // Vignette
-    ELECTRONIC,     // Elektronische Maut (Go-Box etc.)
-    TOLL_BOOTH,     // Maut-Station
-    MIXED           // Gemischt
+    NONE, VIGNETTE, ELECTRONIC, TOLL_BOOTH, MIXED
 }
 
 /**
  * VIGNETTEN-TYPEN
  */
 data class VignetteType(
-    val name: String = "",                // z.B. "10-Tage", "Monats-", "Jahresvignette"
-    val price: Double = 0.0,              // Preis in EUR
-    val duration: String = "",            // z.B. "10 Tage", "1 Jahr"
-    val vehicleClasses: List<String> = emptyList(),  // Welche Fahrzeugklassen?
-    val purchaseUrl: String? = null       // Wo online kaufen?
+    val name: String = "",
+    val price: Double = 0.0,
+    val duration: String = "",
+    val vehicleClasses: List<String> = emptyList(),
+    val purchaseUrl: String? = null
 )
 
 /**
@@ -79,16 +79,12 @@ data class Requirement(
     val type: RequirementType = RequirementType.OTHER,
     val title: String = "",
     val description: String = "",
-    val mandatory: Boolean = true,        // Pflicht oder Empfehlung?
-    val fine: String? = null              // Bußgeld bei Nichteinhaltung
+    val mandatory: Boolean = true,
+    val fine: String? = null
 )
 
 enum class RequirementType {
-    DOCUMENT,          // Dokumente
-    EQUIPMENT,         // Ausrüstung
-    TOLL,              // Maut/Vignette
-    PERMIT,            // Genehmigungen
-    OTHER              // Sonstiges
+    DOCUMENT, EQUIPMENT, TOLL, PERMIT, OTHER
 }
 
 /**
@@ -98,208 +94,223 @@ data class Restriction(
     val type: RestrictionType = RestrictionType.OTHER,
     val title: String = "",
     val description: String = "",
-    val whenToApply: String = ""          // Wann gilt das?
+    val whenToApply: String = ""
 )
 
 enum class RestrictionType {
-    WEIGHT,            // Gewichtsbeschränkung
-    DIMENSION,         // Größenbeschränkung
-    TIME,              // Zeitliche Beschränkung
-    WEATHER,           // Wetterabhängig
-    ROAD,              // Straßenabhängig
-    OTHER              // Sonstiges
+    WEIGHT, DIMENSION, TIME, WEATHER, ROAD, OTHER
 }
 
 /**
  * WINTERPERIODE
  */
 data class WinterPeriod(
-    val startDate: String = "",           // z.B. "01.11."
-    val endDate: String = "",             // z.B. "15.04."
-    val condition: String = ""            // z.B. "bei Schneeglätte oder Glatteis"
+    val startDate: String = "",
+    val endDate: String = "",
+    val condition: String = ""
 )
 
 /**
  * KRAFTSTOFFPREISE
  */
 data class FuelPrices(
-    val diesel: Double = 0.0,            // Preis pro Liter in EUR
+    val diesel: Double = 0.0,
     val updated: Long = System.currentTimeMillis()
 )
 
 /**
- * VORDEFINIERTE LÄNDER
- *
+ * 🇪🇺 VORDEFINIERTE LÄNDER 🇪🇺
  * Wichtige Transit-Länder für LKW-Fahrer in Europa
  */
 object PredefinedCountries {
+
+    // 🇩🇪 DEUTSCHLAND
     val GERMANY = CountryInfo(
         id = "DE",
         name = "Deutschland",
         flag = "🇩🇪",
         callingCode = "+49",
-
+        speedLimitHighway = 80,
+        speedLimitCountry = 60, // > 7.5t
         tollSystem = TollSystem.ELECTRONIC,
-        vignetteRequired = false,
-        electronicTollRequired = true,    // Toll Collect
+        electronicTollRequired = true,
         tollSystemName = "Toll Collect",
-
         requirements = listOf(
-            Requirement(
-                type = RequirementType.DOCUMENT,
-                title = "Papiere",
-                description = "Führerschein, Fahrzeugschein, Ladebegleitskarte, ADR bei Gefahrgut"
-            )
+            Requirement(RequirementType.DOCUMENT, "Papiere", "Führerschein, Fahrzeugschein, Ladebegleitpapiere"),
+            Requirement(RequirementType.EQUIPMENT, "Warnweste", "Pflicht für Fahrer")
         ),
-
         winterTiresRequired = true,
-        winterPeriod = WinterPeriod(
-            startDate = "01.10.",
-            endDate = "31.03.",
-            condition = "bei winterlichen Verhältnissen"
-        ),
-
-        truckDrivingBanInfo = " Sonn- und Feiertagsfahrverbot: 0-22 Uhr. Ausnahmen: z.B. in Bayern von 22-22 Uhr",
-
-        emergencyNumber = "112",
-        currency = "EUR",
-        language = "de",
-
-        tips = listOf(
-            "Toll Collect Box immer eingeschaltet haben!",
-            "Sonntagsfahrverbot beachten (Ausnahmen vorhanden)",
-            "Pkw-Maut auch auf BAB beachten"
-        ),
-        commonIssues = listOf(
-            "Stau um Ballungsräume (München, Frankfurt, Hamburg)",
-            "Baustellen sind häufig"
-        )
+        winterPeriod = WinterPeriod("01.10.", "31.03.", "bei winterlichen Verhältnissen"),
+        truckDrivingBanInfo = "Sonn- und Feiertage: 0-22 Uhr (Ferienfahrverbote beachten!)",
+        tips = listOf("Toll Collect OBU immer checken!", "Rettungsgasse bilden bei Stau!", "Hupverbot in Ortschaften beachten"),
+        commonIssues = listOf("Stau im Ruhrgebiet", "Parkplatzmangel ab 17 Uhr")
     )
 
+    // 🇦🇹 ÖSTERREICH
     val AUSTRIA = CountryInfo(
         id = "AT",
         name = "Österreich",
         flag = "🇦🇹",
         callingCode = "+43",
-
+        speedLimitHighway = 80, // Nachts oft 60 (Lärmschutz)!
+        speedLimitCountry = 70, // > 7.5t
         tollSystem = TollSystem.MIXED,
         vignetteRequired = true,
-        vignetteTypes = listOf(
-            VignetteType(name = "Tagesvignette", price = 25.90, duration = "Tages"),
-            VignetteType(name = "10-Tage", price = 34.00, duration = "10 Tage"),
-            VignetteType(name = "2-Monate", price = 96.70, duration = "2 Monate"),
-            VignetteType(name = "Jahresvignette", price = 955.50, duration = "Jahr")
-        ),
         electronicTollRequired = true,
         tollSystemName = "Go-Box",
-
         requirements = listOf(
-            Requirement(
-                type = RequirementType.TOLL,
-                title = "Go-Box",
-                description = "Für Fahrzeuge über 3,5t zwingend erforderlich",
-                mandatory = true,
-                fine = "€2.000-€10.000"
-            ),
-            Requirement(
-                type = RequirementType.DOCUMENT,
-                title = "LKW-Maut-Vignette",
-                description = "Für Fahrzeuge unter 3,5t",
-                mandatory = true
-            )
+            Requirement(RequirementType.TOLL, "Go-Box", "Pflicht > 3.5t. Vorher aufladen!", true, "ab €220 Strafe"),
+            Requirement(RequirementType.EQUIPMENT, "Schneeketten", "Mitführpflicht 1.11.-15.4.")
         ),
-
         winterTiresRequired = true,
         snowChainsRequired = true,
-        winterPeriod = WinterPeriod(
-            startDate = "01.11.",
-            endDate = "15.04.",
-            condition = "bei winterlichen Verhältnissen"
-        ),
-
-        truckDrivingBanInfo = " Sonntagsfahrverbot: 0-22 Uhr",
-
-        emergencyNumber = "112",
-        currency = "EUR",
-        language = "de",
-
-        tips = listOf(
-            "Schneeketten immer mitführen! Wintersituation ändert sich schnell in den Bergen!",
-            "Go-Box vorher beantragen und aufladen!",
-            "Ganzjährig bei schwereren LKW über 7,5t sind Winterreifen Pflicht"
-        ),
-        commonIssues = listOf(
-            "Schnelle Wetterumschwünge in den Alpen",
-            "Straßensperrungen bei Sturm",
-            "Lange Staustrecken bei Grenzübertritt"
-        )
+        winterPeriod = WinterPeriod("01.11.", "15.04.", "Winterreifenpflicht an Antriebsachse"),
+        truckDrivingBanInfo = "Nachtfahrverbot 22-5 Uhr (außer 'Lärmarme' LKW). Wochenendfahrverbot Sa 15 Uhr - So 22 Uhr.",
+        tips = listOf("IG-L (Immissionsschutz) Tempo beachten!", "Go-Box Piepser zählen (1x=OK, 2x=Guthaben niedrig, 0x/4x=FEHLER)"),
+        commonIssues = listOf("Hohe Strafen bei Go-Box Fehlern", "Inntalautobahn Blockabfertigung")
     )
 
+    // 🇨🇭 SCHWEIZ
     val SWITZERLAND = CountryInfo(
         id = "CH",
         name = "Schweiz",
         flag = "🇨🇭",
         callingCode = "+41",
-
+        currency = "CHF",
+        speedLimitHighway = 80,
+        speedLimitCountry = 80,
         tollSystem = TollSystem.ELECTRONIC,
-        vignetteRequired = false,
         electronicTollRequired = true,
         tollSystemName = "LSVA",
-
         requirements = listOf(
-            Requirement(
-                type = RequirementType.TOLL,
-                title = "LSVA-Karte",
-                description = "Leistungsabhängige Schwerverkehrsabzahlung",
-                mandatory = true,
-                fine = "CHF 20.000-30.000"
-            ),
-            Requirement(
-                type = RequirementType.DOCUMENT,
-                title = "Fahrzeugzulassung",
-                description = "Verschiedene Dokumente für Auslandstransporte",
-                mandatory = true
-            )
+            Requirement(RequirementType.TOLL, "LSVA / ID Card", "Leistungsabhängige Abgabe", true, "Sehr hohe Strafen!"),
+            Requirement(RequirementType.DOCUMENT, "Zollpapiere", "Vor Einfahrt bereit haben (e-dec)")
         ),
-
         winterTiresRequired = true,
         snowChainsRequired = true,
-        winterPeriod = WinterPeriod(
-            startDate = "01.10.",
-            endDate = "30.04.",
-            condition = "bei winterlichen Verhältnissen"
+        winterPeriod = WinterPeriod("01.10.", "30.04.", "Schneeketten obligatorisch bei Signal"),
+        truckDrivingBanInfo = "Nachtfahrverbot 22-5 Uhr strikt! Sonntagsfahrverbot.",
+        tips = listOf("Kein Navi-Radarwarner erlaubt!", "Zollzeiten genau beachten", "Teure Bußgelder"),
+        commonIssues = listOf("Lange Wartezeiten am Zoll (Basel/Chiasso)")
+    )
+
+    // 🇵🇱 POLEN
+    val POLAND = CountryInfo(
+        id = "PL",
+        name = "Polen",
+        flag = "🇵🇱",
+        callingCode = "+48",
+        currency = "PLN",
+        speedLimitHighway = 80,
+        speedLimitCountry = 70,
+        tollSystem = TollSystem.ELECTRONIC,
+        electronicTollRequired = true,
+        tollSystemName = "e-TOLL",
+        requirements = listOf(
+            Requirement(RequirementType.TOLL, "e-TOLL App/OBU", "Pflicht > 3.5t auf Nationalstraßen"),
+            Requirement(RequirementType.EQUIPMENT, "Feuerlöscher", "Zusätzlich vorgeschrieben!")
         ),
+        winterTiresRequired = false, // Aber empfohlen
+        winterPeriod = WinterPeriod("01.11.", "31.03.", "Empfohlen"),
+        truckDrivingBanInfo = "Feiertage & Ferienzeiten beachten (oft Fr-So im Sommer)",
+        tips = listOf("e-TOLL Konto vor Grenzübertritt laden", "Warnweste für JEDEN Insassen"),
+        commonIssues = listOf("Schlechte Straßen im Osten", "Sprachbarriere bei Kontrollen")
+    )
 
-        truckDrivingBanInfo = " Sonntagsfahrverbot: 22-7 Uhr. Ausnahmen: z.B. im Landverkehr 0-24 Uhr",
-
-        emergencyNumber = "112",
-        currency = "CHF",
-        language = "de",
-
-        tips = listOf(
-            "LSVA vorher kaufen! (Brennpass, Internet, oder Tankstellen)",
-            "Maximale Geschwindigkeit 80 km/h auf Autobahnen!",
-            "Nachtfahrverbot beachten (22-7 Uhr)",
-            "Schnelle Wetteränderungen in den Bergen!"
+    // 🇨🇿 TSCHECHIEN
+    val CZECH = CountryInfo(
+        id = "CZ",
+        name = "Tschechien",
+        flag = "🇨🇿",
+        callingCode = "+420",
+        currency = "CZK",
+        speedLimitHighway = 80,
+        speedLimitCountry = 70, // Offiziell oft, LKW fahren meist 80
+        tollSystem = TollSystem.ELECTRONIC,
+        electronicTollRequired = true,
+        tollSystemName = "Myto CZ",
+        requirements = listOf(
+            Requirement(RequirementType.TOLL, "Myto Box", "Pflicht > 3.5t"),
+            Requirement(RequirementType.EQUIPMENT, "Ersatzlampen-Set", "Mitführpflicht!")
         ),
-        commonIssues = listOf(
-            "Sehr hohe Mautkosten",
-            "Tempo 80 ist streng überwacht!",
-            "Straßensperrungen im Winter häufig"
-        )
+        winterTiresRequired = true,
+        winterPeriod = WinterPeriod("01.11.", "31.03.", "Pflicht auf gekennzeichneten Strecken"),
+        truckDrivingBanInfo = "So 13-22 Uhr. Ferien: Fr 17-21, Sa 7-13 Uhr.",
+        tips = listOf("Licht am Tag Pflicht!", "0.0 Promille Grenze strikt!"),
+        commonIssues = listOf("D1 Autobahn (Prag-Brünn) oft Baustellen")
+    )
+
+    // 🇫🇷 FRANKREICH
+    val FRANCE = CountryInfo(
+        id = "FR",
+        name = "Frankreich",
+        flag = "🇫🇷",
+        callingCode = "+33",
+        speedLimitHighway = 90, // LKW dürfen hier schneller!
+        speedLimitCountry = 80, // Auf Priority Roads, sonst 60
+        tollSystem = TollSystem.ELECTRONIC,
+        electronicTollRequired = true,
+        tollSystemName = "TIS-PL (Télépéage)",
+        requirements = listOf(
+            Requirement(RequirementType.TOLL, "Télépéage Box", "Für fast alle Autobahnen"),
+            Requirement(RequirementType.EQUIPMENT, "Toter-Winkel-Aufkleber", "Pflicht 'Angles Morts'!")
+        ),
+        winterTiresRequired = true,
+        winterPeriod = WinterPeriod("01.11.", "31.03.", "In Gebirgsregionen"),
+        truckDrivingBanInfo = "Sa 22 Uhr - So 22 Uhr. Ferienfahrverbote beachten.",
+        tips = listOf("Angles Morts Aufkleber an Zugmaschine UND Auflieger!", "Alkoholtester mitführen"),
+        commonIssues = listOf("Teure Autobahnmaut", "Flüchtlinge in Calais")
+    )
+
+    // 🇧🇪 BELGIEN
+    val BELGIUM = CountryInfo(
+        id = "BE",
+        name = "Belgien",
+        flag = "🇧🇪",
+        callingCode = "+32",
+        speedLimitHighway = 90,
+        speedLimitCountry = 60, // Flandern! Wallonie 90. Wir warnen lieber vor 60.
+        tollSystem = TollSystem.ELECTRONIC,
+        electronicTollRequired = true,
+        tollSystemName = "Viapass (Satellic)",
+        requirements = listOf(
+            Requirement(RequirementType.TOLL, "OBU (Satellic)", "Muss IMMER grün leuchten!"),
+            Requirement(RequirementType.EQUIPMENT, "Feuerlöscher", "Griffbereit im Fahrerhaus")
+        ),
+        truckDrivingBanInfo = "Kein generelles Sonntagsfahrverbot (außer Gefahrgut/Übergröße)",
+        tips = listOf("OBU darf nie rot sein (hohe Strafe!)", "Unterschiedliche Tempolimits Flandern/Wallonie beachten"),
+        commonIssues = listOf("Ring Antwerpen Stau")
+    )
+
+    // 🇳🇱 NIEDERLANDE
+    val NETHERLANDS = CountryInfo(
+        id = "NL",
+        name = "Niederlande",
+        flag = "🇳🇱",
+        callingCode = "+31",
+        speedLimitHighway = 80,
+        speedLimitCountry = 80,
+        tollSystem = TollSystem.VIGNETTE, // Eurovignette (noch bis 2026)
+        tollSystemName = "Eurovignette",
+        requirements = listOf(
+            Requirement(RequirementType.TOLL, "Eurovignette", "Online buchen vor Einfahrt")
+        ),
+        truckDrivingBanInfo = "Kein generelles Sonntagsfahrverbot.",
+        tips = listOf("Viele Blitzer von hinten!", "Parken nur auf ausgewiesenen Plätzen"),
+        commonIssues = listOf("Dichte Verkehrslage Randstad")
     )
 
     /**
-     * Alle vordefinierten Länder
+     * Alle vordefinierten Länder abrufen
      */
     fun getAll(): List<CountryInfo> {
-        return listOf(GERMANY, AUSTRIA, SWITZERLAND)
+        return listOf(GERMANY, AUSTRIA, SWITZERLAND, POLAND, CZECH, FRANCE, BELGIUM, NETHERLANDS)
     }
 
     /**
      * Lädt Land nach Code
      */
     fun getByCode(code: String): CountryInfo? {
-        return getAll().find { it.id == code }
+        return getAll().find { it.id.equals(code, ignoreCase = true) }
     }
 }
