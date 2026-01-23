@@ -17,26 +17,39 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddLocationAlt
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Flag // <--- NEU für Test-Button
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -44,10 +57,14 @@ import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.GeoPoint
 import com.truckershub.R
+import com.truckershub.core.data.model.CountryInfo
+import com.truckershub.core.data.model.PredefinedCountries // <--- NEU: Für Dummies
 import com.truckershub.core.design.TextWhite
+import com.truckershub.core.design.ThubBlack
 import com.truckershub.core.design.ThubDarkGray
 import com.truckershub.core.design.ThubNeonBlue
 import com.truckershub.features.parking.ParkingDetailScreen
@@ -55,8 +72,7 @@ import com.truckershub.features.parking.ParkingViewModel
 import com.truckershub.features.parking.components.ParkingMarkerHelper
 import com.truckershub.features.navigation.RouteViewModel
 import com.truckershub.features.navigation.components.RoutePlanningPanel
-// IMPORT FÜR DEN NEUEN DIALOG
-import com.truckershub.features.map.AddLocationDialog
+import com.truckershub.features.navigation.components.BorderAlert // <--- NEU: Dein Toast
 import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -67,6 +83,8 @@ import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 import java.util.Calendar
+import com.truckershub.features.map.AddLocationDialog
+import com.truckershub.features.map.LocationData
 
 // --- DATENMODELL ---
 data class TruckerBuddy(
@@ -83,7 +101,9 @@ data class TruckerBuddy(
 fun OsmMap(
     modifier: Modifier = Modifier,
     firestore: FirebaseFirestore = FirebaseFirestore.getInstance(),
-    auth: FirebaseAuth = FirebaseAuth.getInstance()
+    auth: FirebaseAuth = FirebaseAuth.getInstance(),
+    onOpenProfile: (String) -> Unit,
+    onOpenEUGuide: () -> Unit = {} // <--- NEU: Callback für den Border-Alarm (optional, damit HS nicht bricht)
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -100,15 +120,18 @@ fun OsmMap(
     var showParkingDetail by remember { mutableStateOf(false) }
     var hasLoadedInitialParkingSpots by remember { mutableStateOf(false) }
 
-    // NEUE STATES FÜR DAS MELDEN
+    // STATES FÜR DAS MELDEN
     var showAddDialog by remember { mutableStateOf(false) }
     var clickedPoint by remember { mutableStateOf<OsmGeoPoint?>(null) }
-    // Wir brauchen Zugriff auf die MapView Instanz
     var myMapView by remember { mutableStateOf<MapView?>(null) }
 
     // Route-Planung UI States
     var isRoutePlanningVisible by remember { mutableStateOf(true) }
     var isRoutePlanningExpanded by remember { mutableStateOf(false) }
+
+    // BORDER ALERT TEST-STATE 🚧
+    var isBorderTestVisible by remember { mutableStateOf(false) }
+    var currentBorderCountry by remember { mutableStateOf<CountryInfo?>(null) }
 
     var otherTrucks by remember { mutableStateOf<List<TruckerBuddy>>(emptyList()) }
     var selectedBuddy by remember { mutableStateOf<TruckerBuddy?>(null) }
@@ -193,7 +216,7 @@ fun OsmMap(
                     this.overlays.add(locationOverlay)
                     myLocationOverlay = locationOverlay
 
-                    // DARK MODE MAGIC ✨
+                    // DARK MODE
                     if (isNightMode) {
                         val matrix = android.graphics.ColorMatrix()
                         matrix.setSaturation(0f)
@@ -206,9 +229,15 @@ fun OsmMap(
                 }
             },
             update = { mapView ->
-                myMapView = mapView // Instanz merken!
+                myMapView = mapView
 
-                mapView.overlays.removeIf { it is Marker && it.id != "MY_LOC" && it.id != "ROUTE_START" && it.id != "ROUTE_END" }
+                mapView.overlays.removeIf {
+                    it is Marker &&
+                            it.id != "MY_LOC" &&
+                            it.id != "ROUTE_START" &&
+                            it.id != "ROUTE_END" &&
+                            it.id != "TEMP_MARKER"
+                }
                 mapView.overlays.removeIf { it is Polyline }
 
                 // --- ROUTE ZEICHNEN ---
@@ -216,13 +245,11 @@ fun OsmMap(
                 if (route != null) {
                     val encodedString = route.routeDetails.points
                     val points = decodePolyline(encodedString)
-
                     val polyline = Polyline()
                     polyline.setPoints(points)
                     polyline.outlinePaint.color = ThubNeonBlue.toArgb()
                     polyline.outlinePaint.strokeWidth = 15f
                     polyline.outlinePaint.strokeCap = Paint.Cap.ROUND
-
                     mapView.overlays.add(0, polyline)
                 }
 
@@ -261,7 +288,7 @@ fun OsmMap(
             }
         )
 
-        // DAS ROTE FADENKREUZ (Mitte) 🎯
+        // FADENKREUZ
         Icon(
             Icons.Filled.Add,
             contentDescription = "Zielmitte",
@@ -269,30 +296,21 @@ fun OsmMap(
             modifier = Modifier.align(Alignment.Center).size(48.dp)
         )
 
+        // Route Panel
         if (isRoutePlanningVisible) {
             RoutePlanningPanel(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 8.dp),
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
                 expanded = isRoutePlanningExpanded,
                 onExpandToggle = { isRoutePlanningExpanded = !isRoutePlanningExpanded },
                 onStartChanged = { routeViewModel.updateStartPoint(it) },
                 onDestinationChanged = { routeViewModel.updateDestinationPoint(it) },
                 onWaypointAdded = {},
-                onCalculateRoute = {
-                    routeViewModel.calculateRoute()
-                },
+                onCalculateRoute = { routeViewModel.calculateRoute() },
                 onMinimize = { isRoutePlanningExpanded = false },
-                currentLocation = myLocationOverlay?.myLocation?.let {
-                    GeoPoint(it.latitude, it.longitude)
-                }
+                currentLocation = myLocationOverlay?.myLocation?.let { GeoPoint(it.latitude, it.longitude) }
             )
-
             if (routeViewModel.isCalculating) {
-                LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
-                    color = ThubNeonBlue
-                )
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter), color = ThubNeonBlue)
             }
             if (routeViewModel.errorMessage != null) {
                 Text(
@@ -303,16 +321,49 @@ fun OsmMap(
             }
         }
 
-        // BUTTON-STACK UNTEN RECHTS (Melden + Zentrieren)
-        Column(
+        // --- DER NEUE BORDER ALERT TOAST! 🍞🚨 ---
+        // Er schwebt unten in der Mitte
+        Box(
             modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(bottom = 16.dp, end = 16.dp),
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 80.dp) // Platz lassen für Buttons/Nav
+        ) {
+            BorderAlert(
+                country = currentBorderCountry,
+                isVisible = isBorderTestVisible,
+                distanceKm = 5, // Testwert
+                onOpenInfo = {
+                    // Schließt den Alarm und öffnet den Guide
+                    isBorderTestVisible = false
+                    onOpenEUGuide()
+                }
+            )
+        }
+
+        // BUTTONS UNTEN RECHTS
+        Column(
+            modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 16.dp, end = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // TEST-BUTTON FÜR GRENZE (NUR FÜR DEV) 🚧
+            FloatingActionButton(
+                onClick = {
+                    if (isBorderTestVisible) {
+                        isBorderTestVisible = false
+                    } else {
+                        // Simuliere Österreich
+                        currentBorderCountry = PredefinedCountries.AUSTRIA
+                        isBorderTestVisible = true
+                    }
+                },
+                containerColor = Color.Yellow,
+                contentColor = Color.Black
+            ) {
+                Icon(Icons.Filled.Flag, "Test Grenze")
+            }
 
-            // 1. NEUER BUTTON: ORT MELDEN (Rot) 🔴
+            // MELDEN
             FloatingActionButton(
                 onClick = {
                     val center = myMapView?.mapCenter
@@ -329,14 +380,13 @@ fun OsmMap(
                 Icon(Icons.Filled.AddLocationAlt, "Ort melden")
             }
 
-            // 2. ALTER BUTTON: ZENTRIEREN (Blau) 🔵
+            // ZENTRIEREN
             FloatingActionButton(
                 onClick = {
                     myLocationOverlay?.enableFollowLocation()
                     val loc = myLocationOverlay?.myLocation
                     if (loc != null) {
                         mapController?.animateTo(loc)
-                        // Wenn zentriert wird, laden wir auch gleich neue Parkplätze
                         val searchPoint = GeoPoint(loc.latitude, loc.longitude)
                         parkingViewModel.loadParkingSpotsNearby(searchPoint, 50.0)
                     }
@@ -348,39 +398,149 @@ fun OsmMap(
             }
         }
 
-        // DIALOGS & OVERLAYS
-
+        // === POPUP FÜR BUDDIES ===
         if (selectedBuddy != null) {
             val buddy = selectedBuddy!!
+            val isMe = buddy.uid == userId
+
             Dialog(onDismissRequest = { selectedBuddy = null }) {
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = ThubDarkGray),
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth().padding(16.dp)
+                    colors = CardDefaults.cardColors(containerColor = ThubBlack),
+                    shape = RoundedCornerShape(24.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(2.dp, ThubNeonBlue, RoundedCornerShape(24.dp))
+                        .shadow(16.dp, RoundedCornerShape(24.dp), spotColor = ThubNeonBlue)
                 ) {
-                    Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        AsyncImage(model = buddy.profileImageUrl.ifEmpty { R.drawable.thub_logo_bg }, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(100.dp).clip(CircleShape).border(2.dp, ThubNeonBlue, CircleShape))
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            IconButton(onClick = { selectedBuddy = null }) {
+                                Icon(Icons.Filled.Close, contentDescription = "Schließen", tint = ThubNeonBlue)
+                            }
+                        }
+
+                        val statusColor = when(buddy.status) {
+                            "Fahrbereit" -> Color.Green
+                            "Pause" -> ThubNeonBlue
+                            else -> Color.Gray
+                        }
+                        AsyncImage(
+                            model = buddy.profileImageUrl.ifEmpty { R.drawable.thub_logo_bg },
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(120.dp)
+                                .clip(CircleShape)
+                                .border(4.dp, statusColor, CircleShape)
+                                .shadow(8.dp, CircleShape, spotColor = statusColor)
+                        )
+
                         Spacer(modifier = Modifier.height(16.dp))
-                        Text(buddy.name, style = MaterialTheme.typography.headlineSmall, color = ThubNeonBlue, fontWeight = FontWeight.Bold)
-                        Text("Status: ${buddy.status}", color = TextWhite)
-                        Spacer(modifier = Modifier.height(24.dp))
-                        TextButton(onClick = { selectedBuddy = null }) { Text("Schließen", color = Color.Gray) }
+                        Text(buddy.name, style = MaterialTheme.typography.headlineMedium, color = TextWhite, fontWeight = FontWeight.Black)
+                        Text(buddy.truckType, color = Color.Gray, fontSize = 14.sp)
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            color = statusColor.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(16.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, statusColor)
+                        ) {
+                            Text(
+                                text = buddy.status,
+                                color = statusColor,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(32.dp))
+
+                        if (!isMe) {
+                            ThubDialogButton(
+                                text = "Als Freund hinzufügen",
+                                icon = Icons.Filled.PersonAdd,
+                                onClick = {
+                                    if (userId != null) {
+                                        val request = hashMapOf(
+                                            "fromId" to userId, "toId" to buddy.uid,
+                                            "status" to "pending", "timestamp" to FieldValue.serverTimestamp()
+                                        )
+                                        firestore.collection("friend_requests").add(request)
+                                            .addOnSuccessListener {
+                                                Toast.makeText(context, "Anfrage an ${buddy.name} raus! 📨", Toast.LENGTH_SHORT).show()
+                                                selectedBuddy = null
+                                            }
+                                    } else { Toast.makeText(context, "Bitte einloggen!", Toast.LENGTH_SHORT).show() }
+                                }
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
+
+                        // HIER IST JETZT DIE MAGIE! 🪄
+                        ThubDialogButton(
+                            text = "Profil ansehen",
+                            icon = Icons.Filled.Person,
+                            isSecondary = true,
+                            onClick = {
+                                selectedBuddy = null // Dialog schließen
+                                onOpenProfile(buddy.uid) // Das Signal an HomeScreen senden!
+                            }
+                        )
+
+                        if (isMe) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text("(Das bist du selbst)", color = Color.Gray, fontSize = 12.sp)
+                        }
                     }
                 }
             }
         }
 
-        // DER NEUE DIALOG ZUM MELDEN
         if (showAddDialog && clickedPoint != null) {
             AddLocationDialog(
                 lat = clickedPoint!!.latitude,
                 lng = clickedPoint!!.longitude,
                 onDismiss = { showAddDialog = false },
-                onSave = { name, type, desc ->
-                    println("TruckersHub: Neuer Ort '$name' ($type)")
-                    // Hier später an Firestore anbinden!
-                    showAddDialog = false
-                    Toast.makeText(context, "Danke! '$name' gemeldet. ✅", Toast.LENGTH_LONG).show()
+                onSave = { locationData ->
+                    val newParkingSpotData = hashMapOf(
+                        "name" to locationData.name,
+                        "type" to locationData.type,
+                        "description" to locationData.description,
+                        "capacity" to locationData.capacity,
+                        "isPaid" to locationData.isPaid,
+                        "hasShower" to locationData.hasShower,
+                        "hasFood" to locationData.hasFood,
+                        "hasWifi" to locationData.hasWifi,
+                        "address" to locationData.address,
+                        "location" to GeoPoint(clickedPoint!!.latitude, clickedPoint!!.longitude),
+                        "reportedBy" to (auth.currentUser?.uid ?: "anonymous"),
+                        "timestamp" to FieldValue.serverTimestamp(),
+                        "status" to "unknown",
+                        "rating" to 0.0,
+                        "reviewCount" to 0
+                    )
+
+                    firestore.collection("parkingSpots")
+                        .add(newParkingSpotData)
+                        .addOnSuccessListener {
+                            showAddDialog = false
+                            val newMarker = Marker(myMapView)
+                            newMarker.position = clickedPoint
+                            newMarker.title = locationData.name
+                            newMarker.snippet = "Gerade von DIR gemeldet!"
+                            newMarker.id = "TEMP_MARKER"
+                            newMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            myMapView?.overlays?.add(newMarker)
+                            myMapView?.invalidate()
+                            Toast.makeText(context, "Erfolgreich gespeichert! 🌍✅", Toast.LENGTH_LONG).show()
+                        }
+                        .addOnFailureListener { e ->
+                            Toast.makeText(context, "Fehler beim Senden: ${e.message} ❌", Toast.LENGTH_LONG).show()
+                        }
                 }
             )
         }
@@ -421,15 +581,53 @@ fun OsmMap(
     }
 }
 
-// === HILFSFUNKTIONEN ===
+@Composable
+private fun ThubDialogButton(
+    text: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    isSecondary: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (isPressed) 0.96f else 1f, label = "scale")
 
+    val baseColor = if (isSecondary) ThubDarkGray else ThubNeonBlue
+    val textColor = if (isSecondary) ThubNeonBlue else ThubBlack
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(50.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+            .clip(RoundedCornerShape(12.dp))
+            .background(baseColor)
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = if (isPressed) listOf(Color.White.copy(alpha = 0.3f), Color.Transparent)
+                    else listOf(Color.Transparent, Color.Transparent)
+                )
+            )
+            .border(if (isSecondary) 1.dp else 0.dp, ThubNeonBlue, RoundedCornerShape(12.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = textColor)
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(text, color = textColor, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        }
+    }
+}
+
+// === HILFSFUNKTIONEN ===
 private fun decodePolyline(encoded: String): List<OsmGeoPoint> {
     val poly = ArrayList<OsmGeoPoint>()
     var index = 0
     val len = encoded.length
     var lat = 0
     var lng = 0
-
     while (index < len) {
         var b: Int
         var shift = 0
@@ -441,7 +639,6 @@ private fun decodePolyline(encoded: String): List<OsmGeoPoint> {
         } while (b >= 0x20)
         val dlat = if (result and 1 != 0) (result shr 1).inv() else result shr 1
         lat += dlat
-
         shift = 0
         result = 0
         do {
@@ -451,7 +648,6 @@ private fun decodePolyline(encoded: String): List<OsmGeoPoint> {
         } while (b >= 0x20)
         val dlng = if (result and 1 != 0) (result shr 1).inv() else result shr 1
         lng += dlng
-
         val p = OsmGeoPoint(lat / 1E5, lng / 1E5)
         poly.add(p)
     }
@@ -468,7 +664,6 @@ private suspend fun getAvatarMarker(context: Context, url: String, ringColor: Co
         val result = loader.execute(request)
         val rawBitmap = (result.drawable as? BitmapDrawable)?.bitmap
             ?: BitmapFactory.decodeResource(context.resources, R.drawable.thub_logo_bg)
-
         val size = 120
         val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
@@ -487,7 +682,6 @@ private suspend fun getAvatarMarker(context: Context, url: String, ringColor: Co
         paint.color = ringColor.toArgb()
         paint.strokeWidth = 10f
         canvas.drawOval(rectF, paint)
-
         BitmapDrawable(context.resources, output)
     }
 }

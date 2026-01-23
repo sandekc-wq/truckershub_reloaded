@@ -31,14 +31,15 @@ import com.truckershub.core.design.ThubNeonBlue
 
 /**
  * Kompaktes Side-Menü für Truckers Hub
- * Jetzt inkl. FEATURES Sektion (Abfahrtskontrolle etc.)
+ * Jetzt inkl. FEATURES Sektion (Abfahrtskontrolle & EU Guide)
  */
 @Composable
 fun SideMenu(
     isOpen: Boolean = false,
     onToggle: () -> Unit = {},
     onLogoutClick: () -> Unit = {},
-    onChecklistClick: () -> Unit = {} // NEU: Callback für Checkliste
+    onChecklistClick: () -> Unit = {},
+    onEUGuideClick: () -> Unit = {} // <--- HIER HATTE DIE REFERENZ GEFEHLT!
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         // Semi-transparenter Overlay
@@ -117,23 +118,25 @@ fun SideMenu(
                         selected = false,
                         onClick = {
                             onToggle()
-                            onChecklistClick() // Öffnet den Check-Screen
+                            onChecklistClick()
                         },
                         modifier = Modifier.padding(horizontal = 8.dp),
                         colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
                     )
 
-                    // Platzhalter für später (EU Richtlinien etc.)
-                    /*
+                    // Menü-Punkt: EU Guide
                     NavigationDrawerItem(
-                        label = { Text("EU Richtlinien", color = TextWhite) },
-                        icon = { Icon(Icons.Default.MenuBook, null, tint = ThubNeonBlue) },
+                        label = { Text("EU Guide 🇪🇺", color = TextWhite) },
+                        // Falls MenuBook nicht gefunden wird, nimm Icons.Default.Info
+                        icon = { Icon(Icons.Default.Info, null, tint = ThubNeonBlue) },
                         selected = false,
-                        onClick = { onToggle() },
+                        onClick = {
+                            onToggle()
+                            onEUGuideClick() // <--- JETZT KENNT ER DEN BEFEHL!
+                        },
                         modifier = Modifier.padding(horizontal = 8.dp),
                         colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
                     )
-                    */
 
                     Spacer(modifier = Modifier.height(16.dp))
                     HorizontalDivider(

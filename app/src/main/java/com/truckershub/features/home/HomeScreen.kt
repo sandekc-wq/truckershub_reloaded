@@ -1,5 +1,6 @@
 package com.truckershub.features.home
 
+import androidx.activity.compose.BackHandler // <--- WICHTIG: Neu importiert
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -15,6 +16,8 @@ import com.truckershub.core.network.rememberOnlineStatus
 import com.truckershub.core.ui.components.OfflineWarningBanner
 import com.truckershub.features.checklist.ChecklistScreen
 import com.truckershub.features.profile.ProfileScreen
+import com.truckershub.features.community.BuddyScreen
+import com.truckershub.features.guide.EUGuideScreen // <--- WICHTIG: Neu importiert
 
 @Suppress("DEPRECATION")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -24,107 +27,157 @@ fun HomeScreen(
 ) {
     val context = LocalContext.current
 
-    // Tabs: 0=Map, 1=Check (Hidden), 2=Profil
+    // Tabs: 0=Map, 1=Check (Hidden), 2=Profil, 3=Community
     var selectedTab by remember { mutableIntStateOf(0) }
 
-    // Status für das Seitenmenü
+    // Welches Profil schauen wir an? (null = meins, String = Lisa etc.)
+    var viewingForeignUserId by remember { mutableStateOf<String?>(null) }
+
     var isMenuOpen by remember { mutableStateOf(false) }
 
-    // Online-Status Prüfung
+    // NEU: Steuerung für den EU Guide
+    var showEUGuide by remember { mutableStateOf(false) }
+
     val isOnline by rememberOnlineStatus(context)
     val lastDataUpdate = remember { System.currentTimeMillis() }
 
+    // NEU: BackHandler fängt die "Zurück"-Taste ab
+    // Priorität: 1. Guide schließen, 2. Profil schließen (zurück zur Map), 3. Menü schließen
+    BackHandler(enabled = isMenuOpen || showEUGuide || viewingForeignUserId != null) {
+        when {
+            isMenuOpen -> isMenuOpen = false
+            showEUGuide -> showEUGuide = false
+            viewingForeignUserId != null -> {
+                viewingForeignUserId = null
+                selectedTab = 0
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("TRUCKERS HUB", color = ThubNeonBlue) },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = ThubBlack),
-                actions = {
-                    IconButton(onClick = { isMenuOpen = !isMenuOpen }) {
-                        Icon(
-                            if (isMenuOpen) Icons.Default.Close else Icons.Default.Menu,
-                            contentDescription = if (isMenuOpen) "Menü schließen" else "Menü öffnen",
-                            tint = ThubNeonBlue,
-                            modifier = Modifier.size(28.dp)
-                        )
+            // TopBar nur anzeigen, wenn EU Guide NICHT offen ist (der hat seine eigene)
+            if (!showEUGuide) {
+                TopAppBar(
+                    title = { Text("TRUCKERS HUB", color = ThubNeonBlue) },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = ThubBlack),
+                    actions = {
+                        IconButton(onClick = { isMenuOpen = !isMenuOpen }) {
+                            Icon(
+                                if (isMenuOpen) Icons.Default.Close else Icons.Default.Menu,
+                                contentDescription = if (isMenuOpen) "Menü schließen" else "Menü öffnen",
+                                tint = ThubNeonBlue,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
                     }
-                }
-            )
+                )
+            }
         },
         bottomBar = {
-            NavigationBar(containerColor = ThubBlack) {
-                // Button 1: Karte
-                NavigationBarItem(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    icon = { Icon(Icons.Default.Home, contentDescription = "Karte") },
-                    label = { Text("Home") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ThubBlack,
-                        selectedTextColor = ThubNeonBlue,
-                        indicatorColor = ThubNeonBlue,
-                        unselectedIconColor = Color.Gray,
-                        unselectedTextColor = Color.Gray
+            // BottomBar ausblenden, wenn Checklist oder EU Guide offen sind
+            if (selectedTab != 1 && !showEUGuide) {
+                NavigationBar(containerColor = ThubBlack) {
+                    // Home
+                    NavigationBarItem(
+                        selected = selectedTab == 0,
+                        onClick = {
+                            selectedTab = 0
+                            viewingForeignUserId = null
+                        },
+                        icon = { Icon(Icons.Default.Home, contentDescription = "Karte") },
+                        label = { Text("Home") },
+                        colors = NavigationBarItemDefaults.colors(selectedIconColor = ThubBlack, selectedTextColor = ThubNeonBlue, indicatorColor = ThubNeonBlue, unselectedIconColor = Color.Gray, unselectedTextColor = Color.Gray)
                     )
-                )
 
-                // HIER WAR VORHER DER CHECK-BUTTON - JETZT GELÖSCHT!
-                // Platz ist jetzt frei für spätere Features (Chat etc.)
-
-                // Button 2: Profil (war vorher 3)
-                NavigationBarItem(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    icon = { Icon(Icons.Default.Person, contentDescription = "Profil") },
-                    label = { Text("Profil") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = ThubBlack,
-                        selectedTextColor = ThubNeonBlue,
-                        indicatorColor = ThubNeonBlue,
-                        unselectedIconColor = Color.Gray,
-                        unselectedTextColor = Color.Gray
+                    // Buddies
+                    NavigationBarItem(
+                        selected = selectedTab == 3,
+                        onClick = {
+                            selectedTab = 3
+                            viewingForeignUserId = null
+                        },
+                        icon = { Icon(Icons.Default.Group, contentDescription = "Community") },
+                        label = { Text("Buddies") },
+                        colors = NavigationBarItemDefaults.colors(selectedIconColor = ThubBlack, selectedTextColor = ThubNeonBlue, indicatorColor = ThubNeonBlue, unselectedIconColor = Color.Gray, unselectedTextColor = Color.Gray)
                     )
-                )
+
+                    // Profil
+                    NavigationBarItem(
+                        selected = selectedTab == 2,
+                        onClick = {
+                            selectedTab = 2
+                            viewingForeignUserId = null
+                        },
+                        icon = { Icon(Icons.Default.Person, contentDescription = "Profil") },
+                        label = { Text("Profil") },
+                        colors = NavigationBarItemDefaults.colors(selectedIconColor = ThubBlack, selectedTextColor = ThubNeonBlue, indicatorColor = ThubNeonBlue, unselectedIconColor = Color.Gray, unselectedTextColor = Color.Gray)
+                    )
+                }
             }
         },
         containerColor = ThubBlack
     ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
-            Column(
-                modifier = Modifier.fillMaxSize()
-            ) {
-                OfflineWarningBanner(
-                    isVisible = !isOnline,
-                    lastUpdated = lastDataUpdate
-                )
+        Box(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
 
-                // Der Inhalt
-                Surface(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .weight(1f),
-                    color = ThubBlack
-                ) {
-                    when (selectedTab) {
-                        0 -> OsmMap(modifier = Modifier.fillMaxSize())
-                        1 -> ChecklistScreen() // Wird jetzt über das Menü aufgerufen!
-                        2 -> ProfileScreen(onBackClick = { selectedTab = 0 })
+            // HAUPT-INHALT (Nur wenn Guide nicht aktiv ist, um Ressourcen zu sparen)
+            if (!showEUGuide) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    OfflineWarningBanner(isVisible = !isOnline, lastUpdated = lastDataUpdate)
+
+                    Surface(modifier = Modifier.fillMaxSize().weight(1f), color = ThubBlack) {
+                        when (selectedTab) {
+                            0 -> OsmMap(
+                                modifier = Modifier.fillMaxSize(),
+                                onOpenProfile = { targetId ->
+                                    viewingForeignUserId = targetId
+                                    selectedTab = 2
+                                },
+                                // HIER IST DAS FEHLENDE KABEL: 👇
+                                onOpenEUGuide = { showEUGuide = true }
+                            )
+                            1 -> ChecklistScreen(
+                                // Optional: Callback hinzufügen, um zurück zur Map zu kommen
+                                // onBack = { selectedTab = 0 }
+                            )
+                            2 -> ProfileScreen(
+                                targetUserId = viewingForeignUserId,
+                                onBackClick = {
+                                    if (viewingForeignUserId != null) {
+                                        viewingForeignUserId = null
+                                        selectedTab = 0
+                                    } else {
+                                        selectedTab = 0
+                                    }
+                                }
+                            )
+                            3 -> BuddyScreen()
+                        }
                     }
                 }
             }
 
-            // SideMenu überlagert den Screen
+            // NEU: DER EU GUIDE OVERLAY 🇪🇺
+            // Er legt sich über alles andere, wenn showEUGuide == true
+            if (showEUGuide) {
+                Surface(modifier = Modifier.fillMaxSize(), color = ThubBlack) {
+                    EUGuideScreen(onBack = { showEUGuide = false })
+                }
+            }
+
+            // SIDE MENU (Liegt immer ganz oben)
             SideMenu(
                 isOpen = isMenuOpen,
                 onToggle = { isMenuOpen = !isMenuOpen },
                 onLogoutClick = onLogoutClick,
-                // WICHTIG: Hier verbinden wir das Menü mit dem Screen-Wechsel
                 onChecklistClick = {
-                    selectedTab = 1
+                    isMenuOpen = false // Menü zu
+                    selectedTab = 1    // Zur Checkliste wechseln
+                    showEUGuide = false // Sicherheitshalber Guide zu
+                },
+                onEUGuideClick = {     // <--- DAS NEUE KABEL!
+                    isMenuOpen = false // Menü zu
+                    showEUGuide = true // Guide auf
                 }
             )
         }
