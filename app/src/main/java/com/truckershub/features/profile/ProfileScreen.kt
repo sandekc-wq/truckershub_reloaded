@@ -23,7 +23,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha // <--- WICHTIG
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -32,7 +32,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontStyle // <--- DER HAT GEFEHLT!
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -46,18 +46,21 @@ import com.truckershub.core.design.TextWhite
 import com.truckershub.core.design.ThubDarkGray
 import com.truckershub.core.design.ThubNeonBlue
 import com.truckershub.core.data.model.User
-import com.truckershub.core.network.SecureHttpClient
+// SecureHttpClient entfernt!
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
+import okhttp3.OkHttpClient // Standard Client
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.TimeUnit
 
 // --- HELPER ---
+// URL jetzt sicher über Let's Encrypt!
 private const val UPLOAD_URL = "https://inetfacts.de/thub_api/upload_thub.php"
 private const val SECRET_KEY = "LKW_V8_POWER"
 
@@ -90,7 +93,7 @@ fun StatusButtonBig(icon: ImageVector, text: String, color: Color, isSelected: B
             .height(90.dp)
             .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
             .shadow(if (isSelected) 10.dp else 0.dp, RoundedCornerShape(16.dp), spotColor = color)
-            .alpha(if (enabled) 1f else 0.6f) // <--- HIER REPARIERT (Einfacher & Sauberer)
+            .alpha(if (enabled) 1f else 0.6f)
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -178,7 +181,13 @@ fun ProfileViewScreen(
     firestore: FirebaseFirestore
 ) {
     val context = LocalContext.current
-    val imageLoader = remember { ImageLoader.Builder(context).okHttpClient { SecureHttpClient.createImageLoadingClient(context) }.crossfade(true).build() }
+
+    // IMAGE LOADER AUF STANDARD GESETZT
+    val imageLoader = remember {
+        ImageLoader.Builder(context)
+            .crossfade(true)
+            .build()
+    }
 
     val funkName = user?.funkName?.ifBlank { "Unbekannt" } ?: "Laden..."
     val currentStatus = user?.status ?: "Fahrbereit"
@@ -223,7 +232,7 @@ fun ProfileViewScreen(
 
                         if (!user?.bio.isNullOrEmpty()) {
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text("\"${user?.bio}\"", color = Color.White.copy(alpha = 0.8f), fontStyle = FontStyle.Italic, fontSize = 14.sp) // <--- JETZT GEHT DAS!
+                            Text("\"${user?.bio}\"", color = Color.White.copy(alpha = 0.8f), fontStyle = FontStyle.Italic, fontSize = 14.sp)
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
@@ -322,7 +331,13 @@ fun ProfileEditScreen(
                     try {
                         val bitmap = it.toScaledBitmap(context)
                         val outputStream = ByteArrayOutputStream(); bitmap.compress(Bitmap.CompressFormat.JPEG, 80, outputStream)
-                        val client = SecureHttpClient.createSecureClient(context, true)
+
+                        // STANDARD CLIENT STATT SECURE CLIENT
+                        val client = OkHttpClient.Builder()
+                            .connectTimeout(60, TimeUnit.SECONDS)
+                            .readTimeout(60, TimeUnit.SECONDS)
+                            .build()
+
                         val requestBody = MultipartBody.Builder().setType(MultipartBody.FORM).addFormDataPart("key", SECRET_KEY).addFormDataPart("image", "profile_${userId}.jpg", outputStream.toByteArray().toRequestBody("image/jpeg".toMediaTypeOrNull())).build()
                         val request = Request.Builder().url(UPLOAD_URL).post(requestBody).build()
                         val json = JSONObject(client.newCall(request).execute().body?.string() ?: "")

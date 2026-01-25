@@ -24,24 +24,23 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
 import java.util.Date
 import java.util.concurrent.TimeUnit
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
 
 class FeedViewModel : ViewModel() {
     private val firestore = FirebaseFirestore.getInstance()
     private val auth = FirebaseAuth.getInstance()
 
     // --- SERVER URL ---
-    // Hier deine URL eintragen (https ist okay, wir ignorieren Fehler!)
+    // Jetzt sicher über Let's Encrypt!
     private val UPLOAD_SERVER_URL = "https://inetfacts.de/feed/upload_feed.php"
 
-    // Wir nutzen jetzt unseren toleranten Client statt dem Standard-Client
-    private val client = getUnsafeOkHttpClient()
+    // Standard Client, da Zertifikat jetzt gültig ist
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .build()
 
     var posts by mutableStateOf<List<Post>>(emptyList())
         private set
@@ -81,6 +80,24 @@ class FeedViewModel : ViewModel() {
             postRef.update("likes", FieldValue.arrayRemove(user.uid))
         } else {
             postRef.update("likes", FieldValue.arrayUnion(user.uid))
+        }
+    }
+
+    // --- NEU: POST LÖSCHEN ---
+    fun deletePost(post: Post) {
+        val user = auth.currentUser ?: return
+
+        // Sicherheits-Check: Gehört der Post wirklich mir?
+        if (post.userId == user.uid) {
+            firestore.collection("posts").document(post.id)
+                .delete()
+                .addOnSuccessListener {
+                    Log.d("FeedViewModel", "Post gelöscht!")
+                    // Die Liste aktualisiert sich automatisch durch den SnapshotListener oben
+                }
+                .addOnFailureListener { e ->
+                    Log.e("FeedViewModel", "Fehler beim Löschen", e)
+                }
         }
     }
 
@@ -185,33 +202,5 @@ class FeedViewModel : ViewModel() {
                     .addOnFailureListener { onInternalResult(false) }
             }
             .addOnFailureListener { onInternalResult(false) }
-    }
-
-    // --- DER SSL-TÜRSTEHER 😎 ---
-    // Diese Funktion erstellt einen Client, der ALLES akzeptiert
-    private fun getUnsafeOkHttpClient(): OkHttpClient {
-        return try {
-            // Erstelle einen TrustManager, der nicht prüft
-            val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-            })
-
-            // Installiere den TrustManager
-            val sslContext = SSLContext.getInstance("SSL")
-            sslContext.init(null, trustAllCerts, SecureRandom())
-            val sslSocketFactory = sslContext.socketFactory
-
-            OkHttpClient.Builder()
-                .sslSocketFactory(sslSocketFactory, trustAllCerts[0] as X509TrustManager)
-                .hostnameVerifier { _, _ -> true } // Akzeptiere jeden Hostnamen
-                .connectTimeout(60, TimeUnit.SECONDS)
-                .readTimeout(60, TimeUnit.SECONDS)
-                .writeTimeout(60, TimeUnit.SECONDS)
-                .build()
-        } catch (e: Exception) {
-            throw RuntimeException(e)
-        }
     }
 }

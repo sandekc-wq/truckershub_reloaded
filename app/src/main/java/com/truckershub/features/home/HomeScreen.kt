@@ -7,10 +7,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.truckershub.core.design.ThubBlack
 import com.truckershub.core.design.ThubNeonBlue
 import com.truckershub.core.network.rememberOnlineStatus
@@ -18,8 +22,11 @@ import com.truckershub.core.ui.components.OfflineWarningBanner
 import com.truckershub.features.checklist.ChecklistScreen
 import com.truckershub.features.profile.ProfileScreen
 import com.truckershub.features.community.BuddyScreen
+import com.truckershub.features.community.ChatScreen
+import com.truckershub.features.community.CommentScreen
 import com.truckershub.features.guide.EUGuideScreen
-import com.truckershub.features.feed.FeedScreen // <--- WICHTIG: Importieren!
+import com.truckershub.features.feed.FeedScreen
+import com.truckershub.features.translator.TranslatorScreen
 
 @Suppress("DEPRECATION")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -29,41 +36,63 @@ fun HomeScreen(
 ) {
     val context = LocalContext.current
 
-    // TABS:
-    // 0 = Map (Home)
-    // 1 = Feed (Neu)
-    // 2 = Buddies
-    // 3 = Profil
-    // 4 = Checkliste (Bar ausgeblendet)
+    // TABS: 0=Map, 1=Feed, 2=Buddies, 3=Profil, 4=Checkliste
     var selectedTab by remember { mutableIntStateOf(0) }
 
-    // Welches Profil schauen wir an?
+    // Navigation Status Variablen
     var viewingForeignUserId by remember { mutableStateOf<String?>(null) }
+    var activeChatBuddy by remember { mutableStateOf<String?>(null) }
+    var viewingCommentsForPostId by remember { mutableStateOf<String?>(null) }
 
     var isMenuOpen by remember { mutableStateOf(false) }
     var showEUGuide by remember { mutableStateOf(false) }
+    var showTranslator by remember { mutableStateOf(false) }
 
     val isOnline by rememberOnlineStatus(context)
     val lastDataUpdate = remember { System.currentTimeMillis() }
 
-    // BackHandler: Zurück-Taste Logik
-    BackHandler(enabled = isMenuOpen || showEUGuide || viewingForeignUserId != null || selectedTab != 0) {
+    // --- ZENTRALER BACK-HANDLER ---
+    BackHandler(enabled = isMenuOpen || showEUGuide || showTranslator || viewingCommentsForPostId != null || viewingForeignUserId != null || activeChatBuddy != null || selectedTab != 0) {
         when {
             isMenuOpen -> isMenuOpen = false
+            showTranslator -> showTranslator = false
             showEUGuide -> showEUGuide = false
+            viewingCommentsForPostId != null -> viewingCommentsForPostId = null
+            activeChatBuddy != null -> activeChatBuddy = null
             viewingForeignUserId != null -> {
                 viewingForeignUserId = null
-                selectedTab = 2 // Zurück zur Buddy Liste
+                selectedTab = 2
             }
-            selectedTab != 0 -> selectedTab = 0 // Sonst zurück zur Map
+            selectedTab != 0 -> selectedTab = 0
         }
     }
 
     Scaffold(
         topBar = {
-            if (!showEUGuide) {
+            // TopBar ausblenden, wenn Overlays offen sind
+            if (!showEUGuide && !showTranslator && viewingCommentsForPostId == null && activeChatBuddy == null) {
                 TopAppBar(
-                    title = { Text("TRUCKERS HUB", color = ThubNeonBlue) },
+                    title = {
+                        // HIER IST DAS NEUE LOGO-DESIGN 👇
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            // 1. THUB (Neon & Fett)
+                            Text(
+                                text = "THUB",
+                                color = ThubNeonBlue,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 22.sp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            // 2. The Truckers Knife (Grau, klein & kursiv wie ein Kommentar)
+                            Text(
+                                text = "The Truckers Knife",
+                                color = Color.Gray,
+                                fontSize = 14.sp,
+                                fontStyle = FontStyle.Italic
+                            )
+                        }
+                    },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = ThubBlack),
                     actions = {
                         IconButton(onClick = { isMenuOpen = !isMenuOpen }) {
@@ -79,11 +108,9 @@ fun HomeScreen(
             }
         },
         bottomBar = {
-            // Bar ausblenden bei Checkliste (4) oder Guide
-            if (selectedTab != 4 && !showEUGuide) {
+            // BottomBar ausblenden bei Overlays
+            if (selectedTab != 4 && !showEUGuide && !showTranslator && viewingCommentsForPostId == null && activeChatBuddy == null) {
                 NavigationBar(containerColor = ThubBlack) {
-
-                    // 1. HOME (MAP)
                     NavigationBarItem(
                         selected = selectedTab == 0,
                         onClick = { selectedTab = 0; viewingForeignUserId = null },
@@ -91,18 +118,13 @@ fun HomeScreen(
                         label = { Text("Map") },
                         colors = navColors()
                     )
-
-                    // 2. FEED (NEU!) ⛽
                     NavigationBarItem(
                         selected = selectedTab == 1,
                         onClick = { selectedTab = 1; viewingForeignUserId = null },
-                        // DynamicFeed Icon ist manchmal zickig, wenn nicht vorhanden nimm List
                         icon = { Icon(Icons.Default.DynamicFeed, "Feed") },
                         label = { Text("Feed") },
                         colors = navColors()
                     )
-
-                    // 3. BUDDIES
                     NavigationBarItem(
                         selected = selectedTab == 2,
                         onClick = { selectedTab = 2; viewingForeignUserId = null },
@@ -110,8 +132,6 @@ fun HomeScreen(
                         label = { Text("Buddies") },
                         colors = navColors()
                     )
-
-                    // 4. PROFIL
                     NavigationBarItem(
                         selected = selectedTab == 3,
                         onClick = { selectedTab = 3; viewingForeignUserId = null },
@@ -126,78 +146,120 @@ fun HomeScreen(
     ) { paddingValues ->
         Box(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
 
-            if (!showEUGuide) {
+            // HAUPT-INHALT
+            if (!showEUGuide && !showTranslator && viewingCommentsForPostId == null) {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    OfflineWarningBanner(isVisible = !isOnline, lastUpdated = lastDataUpdate)
+                    if (activeChatBuddy == null) {
+                        OfflineWarningBanner(isVisible = !isOnline, lastUpdated = lastDataUpdate)
+                    }
 
                     Surface(modifier = Modifier.fillMaxSize().weight(1f), color = ThubBlack) {
-                        // HIER IST DIE LOGIK (Nicht in der BottomBar!)
                         when (selectedTab) {
                             0 -> OsmMap(
                                 modifier = Modifier.fillMaxSize(),
                                 onOpenProfile = { targetId ->
                                     viewingForeignUserId = targetId
-                                    selectedTab = 3 // Wechsel zu Profil Tab
+                                    selectedTab = 3
                                 },
                                 onOpenEUGuide = { showEUGuide = true }
                             )
 
-                            // HIER IST DER NEUE FEED SCREEN! 👇
                             1 -> FeedScreen(
-                                onPostClick = { /* Später: Detailansicht */ },
-                                onFabClick = {
-                                    // Später: Upload Dialog öffnen
-                                    Toast.makeText(context, "Upload kommt gleich!", Toast.LENGTH_SHORT).show()
-                                }
+                                onPostClick = { },
+                                onFabClick = { Toast.makeText(context, "Upload...", Toast.LENGTH_SHORT).show() },
+                                onCommentClick = { postId -> viewingCommentsForPostId = postId }
                             )
 
-                            2 -> BuddyScreen()
+                            2 -> {
+                                if (activeChatBuddy != null) {
+                                    ChatScreen(
+                                        buddyName = activeChatBuddy!!,
+                                        onBack = { activeChatBuddy = null }
+                                    )
+                                } else {
+                                    BuddyScreen(
+                                        onChatClick = { buddyName ->
+                                            activeChatBuddy = buddyName
+                                        }
+                                    )
+                                }
+                            }
 
                             3 -> ProfileScreen(
                                 targetUserId = viewingForeignUserId,
                                 onBackClick = {
                                     if (viewingForeignUserId != null) {
                                         viewingForeignUserId = null
-                                        selectedTab = 2 // Zurück zu Buddies
+                                        selectedTab = 2
                                     } else {
-                                        selectedTab = 0 // Zurück zur Map
+                                        selectedTab = 0
                                     }
                                 }
                             )
 
-                            4 -> ChecklistScreen() // Versteckter Tab
+                            4 -> ChecklistScreen(
+                                onBack = { selectedTab = 0 }
+                            )
                         }
                     }
                 }
             }
 
-            // EU GUIDE OVERLAY
+            // --- OVERLAYS ---
+
+            if (viewingCommentsForPostId != null) {
+                Surface(modifier = Modifier.fillMaxSize(), color = ThubBlack) {
+                    CommentScreen(
+                        postId = viewingCommentsForPostId!!,
+                        onBack = { viewingCommentsForPostId = null }
+                    )
+                }
+            }
+
             if (showEUGuide) {
                 Surface(modifier = Modifier.fillMaxSize(), color = ThubBlack) {
                     EUGuideScreen(onBack = { showEUGuide = false })
                 }
             }
 
-            // SIDE MENU
+            if (showTranslator) {
+                Surface(modifier = Modifier.fillMaxSize(), color = ThubBlack) {
+                    TranslatorScreen(onBack = { showTranslator = false })
+                }
+            }
+
             SideMenu(
                 isOpen = isMenuOpen,
                 onToggle = { isMenuOpen = !isMenuOpen },
                 onLogoutClick = onLogoutClick,
                 onChecklistClick = {
                     isMenuOpen = false
-                    selectedTab = 4 // Setzt den versteckten Tab für Checkliste
+                    selectedTab = 4
                     showEUGuide = false
+                    showTranslator = false
                 },
                 onEUGuideClick = {
                     isMenuOpen = false
                     showEUGuide = true
+                    showTranslator = false
+                },
+                onBuddiesClick = {
+                    isMenuOpen = false
+                    selectedTab = 2
+                    showEUGuide = false
+                    showTranslator = false
+                    viewingForeignUserId = null
+                },
+                onTranslatorClick = {
+                    isMenuOpen = false
+                    showTranslator = true
+                    showEUGuide = false
                 }
             )
         }
     }
 }
 
-// Kleine Hilfsfunktion für die Farben (spart Platz)
 @Composable
 fun navColors() = NavigationBarItemDefaults.colors(
     selectedIconColor = ThubBlack,

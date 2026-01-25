@@ -6,8 +6,8 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FieldValue // WICHTIG: Für das Hochzählen (+1)
-import com.google.firebase.firestore.FirebaseFirestore // WICHTIG: Zugriff auf Datenbank
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.GeoPoint
 import com.truckershub.core.data.model.AmpelReport
 import com.truckershub.core.data.model.AmpelStatus
@@ -31,31 +31,24 @@ class ParkingViewModel(
     // ZUSTAND (STATE)
     // ==========================================
 
-    // Liste aller Parkplätze in der Nähe
     var parkingSpots by mutableStateOf<List<ParkingSpot>>(emptyList())
         private set
 
-    // Ausgewählter Parkplatz (für Detail-Ansicht)
     var selectedParking by mutableStateOf<ParkingSpot?>(null)
         private set
 
-    // Bewertungen des ausgewählten Parkplatzes
     var reviews by mutableStateOf<List<ParkingReview>>(emptyList())
         private set
 
-    // Ampel-Meldungen
     var ampelReports by mutableStateOf<List<AmpelReport>>(emptyList())
         private set
 
-    // Ladezustand
     var isLoading by mutableStateOf(false)
         private set
 
-    // Fehlermeldung
     var errorMessage by mutableStateOf<String?>(null)
         private set
 
-    // Aktueller Benutzer
     private val currentUserId = auth.currentUser?.uid
     private val currentUserName = auth.currentUser?.email?.substringBefore("@") ?: "Fahrer"
 
@@ -63,9 +56,6 @@ class ParkingViewModel(
     // FUNKTIONEN
     // ==========================================
 
-    /**
-     * Parkplätze in der Nähe laden
-     */
     fun loadParkingSpotsNearby(myLocation: GeoPoint, radiusKm: Double = 50.0) {
         viewModelScope.launch {
             isLoading = true
@@ -83,9 +73,6 @@ class ParkingViewModel(
         }
     }
 
-    /**
-     * Einzelnen Parkplatz auswählen
-     */
     fun selectParking(parkingId: String) {
         viewModelScope.launch {
             val parking = repository.getParkingSpot(parkingId)
@@ -98,13 +85,17 @@ class ParkingViewModel(
         }
     }
 
-    /**
-     * Parkplatz-Auswahl zurücksetzen
-     */
     fun clearSelection() {
         selectedParking = null
         reviews = emptyList()
         ampelReports = emptyList()
+    }
+
+    // Hilfsfunktion für die Map (damit der neue Marker sofort sichtbar ist)
+    fun addTemporarySpot(spot: ParkingSpot) {
+        val currentList = parkingSpots.toMutableList()
+        currentList.add(spot)
+        parkingSpots = currentList
     }
 
     /**
@@ -132,9 +123,14 @@ class ParkingViewModel(
             if (success) {
                 errorMessage = null
 
-                // --- NEU: Statistik beim User hochzählen (+1) ---
-                FirebaseFirestore.getInstance().collection("users").document(currentUserId)
-                    .update("stats.ampelUpdates", FieldValue.increment(1))
+                // --- STATISTIK UPDATE ---
+                val userRef = FirebaseFirestore.getInstance().collection("users").document(currentUserId)
+
+                // 1. Ampel-Updates hochzählen
+                userRef.update("stats.ampelUpdates", FieldValue.increment(1))
+
+                // 2. "Parkplätze genutzt" hochzählen (Wer meldet, steht meist auch dort)
+                userRef.update("stats.totalParkings", FieldValue.increment(1))
 
                 // Liste neu laden, um Änderung sofort zu sehen
                 selectedParking?.let {
@@ -156,13 +152,13 @@ class ParkingViewModel(
             if (success) {
                 errorMessage = null
 
-                // --- NEU: Statistik beim User hochzählen (+1) ---
+                // --- STATISTIK UPDATE ---
+                // Bewertungen hochzählen
                 currentUserId?.let { uid ->
                     FirebaseFirestore.getInstance().collection("users").document(uid)
                         .update("stats.totalRatings", FieldValue.increment(1))
                 }
 
-                // Bewertungen neu laden
                 review.parkingId.let { loadReviews(it) }
             } else {
                 errorMessage = "Bewertung konnte nicht gespeichert werden"
@@ -170,9 +166,6 @@ class ParkingViewModel(
         }
     }
 
-    /**
-     * Bewertungen laden
-     */
     private fun loadReviews(parkingId: String) {
         viewModelScope.launch {
             repository.getReviews(parkingId)
@@ -181,9 +174,6 @@ class ParkingViewModel(
         }
     }
 
-    /**
-     * Ampel-Meldungen laden
-     */
     private fun loadAmpelReports(parkingId: String) {
         viewModelScope.launch {
             repository.getAmpelReports(parkingId)

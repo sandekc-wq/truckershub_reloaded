@@ -1,206 +1,134 @@
 package com.truckershub.features.home
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.automirrored.filled.FactCheck
-import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.truckershub.R
-import com.truckershub.core.design.TextWhite
 import com.truckershub.core.design.ThubBlack
+import com.truckershub.core.design.ThubDarkGray
 import com.truckershub.core.design.ThubNeonBlue
+import com.truckershub.core.design.TextWhite
 
-/**
- * Kompaktes Side-Menü für Truckers Hub
- * Jetzt inkl. FEATURES Sektion (Abfahrtskontrolle & EU Guide)
- */
 @Composable
 fun SideMenu(
-    isOpen: Boolean = false,
-    onToggle: () -> Unit = {},
-    onLogoutClick: () -> Unit = {},
-    onChecklistClick: () -> Unit = {},
-    onEUGuideClick: () -> Unit = {} // <--- HIER HATTE DIE REFERENZ GEFEHLT!
+    isOpen: Boolean,
+    onToggle: () -> Unit,
+    onLogoutClick: () -> Unit,
+    onChecklistClick: () -> Unit,
+    onEUGuideClick: () -> Unit,
+    onBuddiesClick: () -> Unit,
+    onTranslatorClick: () -> Unit
 ) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        // Semi-transparenter Overlay
-        if (isOpen) {
-            Box(
+    if (isOpen) {
+        // Dunkler Schleier im Hintergrund, der das Menü schließt, wenn man daneben klickt
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.7f))
+                .clickable { onToggle() }
+        )
+
+        // Das eigentliche Menü (kommt von rechts oder links, hier einfach als Box)
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(300.dp)
+                .background(ThubBlack)
+                .clickable(enabled = false) {} // Klicks im Menü sollen nicht durchgehen
+        ) {
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.4f))
-                    .clickable(enabled = true) { onToggle() }
-            )
-        }
-
-        // Das Menü selbst
-        AnimatedVisibility(
-            visible = isOpen,
-            enter = slideInHorizontally(initialOffsetX = { -it }),
-            exit = slideOutHorizontally(targetOffsetX = { -it })
-        ) {
-            Card(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(280.dp),
-                shape = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp),
-                colors = CardDefaults.cardColors(containerColor = ThubBlack),
-                elevation = CardDefaults.cardElevation(defaultElevation = 16.dp)
+                    .padding(24.dp)
             ) {
-                Column(
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    // Header mit Logo
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Image(
-                                painter = painterResource(id = R.drawable.thub_logo_bg),
-                                contentDescription = "Logo",
-                                modifier = Modifier
-                                    .size(60.dp)
-                                    .clip(CircleShape)
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                "TRUCKERS HUB",
-                                color = ThubNeonBlue,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
-                            )
-                        }
-                    }
+                // Header
+                Text(
+                    "MENÜ",
+                    color = ThubNeonBlue,
+                    fontSize = 24.sp,
+                    modifier = Modifier.padding(bottom = 32.dp)
+                )
 
-                    Spacer(modifier = Modifier.height(8.dp))
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        thickness = 1.dp,
-                        color = ThubNeonBlue.copy(alpha = 0.3f)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
+                // Menüpunkte
+                DrawerItem(
+                    icon = Icons.Default.CheckCircle,
+                    label = "Abfahrtskontrolle",
+                    onClick = onChecklistClick
+                )
 
-                    // === SEKTION: FEATURES ===
-                    Text(
-                        text = "FEATURES",
-                        color = Color.Gray,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(start = 24.dp, bottom = 8.dp)
-                    )
+                DrawerItem(
+                    icon = Icons.AutoMirrored.Filled.MenuBook,
+                    label = "EU Guide (Lenkzeiten)",
+                    onClick = onEUGuideClick
+                )
 
-                    // Menü-Punkt: Abfahrtskontrolle
-                    NavigationDrawerItem(
-                        label = { Text("Abfahrtskontrolle", color = TextWhite) },
-                        icon = { Icon(Icons.AutoMirrored.Filled.FactCheck, null, tint = ThubNeonBlue) },
-                        selected = false,
-                        onClick = {
-                            onToggle()
-                            onChecklistClick()
-                        },
-                        modifier = Modifier.padding(horizontal = 8.dp),
-                        colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
-                    )
+                DrawerItem(
+                    icon = Icons.Default.Group,
+                    label = "Freundesliste",
+                    onClick = onBuddiesClick
+                )
 
-                    // Menü-Punkt: EU Guide
-                    NavigationDrawerItem(
-                        label = { Text("EU Guide 🇪🇺", color = TextWhite) },
-                        // Falls MenuBook nicht gefunden wird, nimm Icons.Default.Info
-                        icon = { Icon(Icons.Default.Info, null, tint = ThubNeonBlue) },
-                        selected = false,
-                        onClick = {
-                            onToggle()
-                            onEUGuideClick() // <--- JETZT KENNT ER DEN BEFEHL!
-                        },
-                        modifier = Modifier.padding(horizontal = 8.dp),
-                        colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
-                    )
+                DrawerItem(
+                    icon = Icons.Default.Translate,
+                    label = "Dolmetscher",
+                    onClick = onTranslatorClick
+                )
 
-                    Spacer(modifier = Modifier.height(16.dp))
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        thickness = 0.5.dp,
-                        color = Color.Gray.copy(alpha = 0.3f)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.weight(1f))
 
-                    // === SEKTION: ALLGEMEIN ===
-
-                    // Menü-Punkt: Freunde
-                    NavigationDrawerItem(
-                        label = { Text("Freunde & Kollegen", color = TextWhite) },
-                        icon = { Icon(Icons.Default.Group, null, tint = ThubNeonBlue) },
-                        selected = false,
-                        onClick = { onToggle() },
-                        modifier = Modifier.padding(horizontal = 8.dp),
-                        colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
-                    )
-
-                    // Menü-Punkt: Nachrichten
-                    NavigationDrawerItem(
-                        label = { Text("Nachrichten", color = TextWhite) },
-                        icon = { Icon(Icons.AutoMirrored.Filled.Chat, null, tint = ThubNeonBlue) },
-                        selected = false,
-                        onClick = { onToggle() },
-                        modifier = Modifier.padding(horizontal = 8.dp),
-                        colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
-                    )
-
-                    // Menü-Punkt: Einstellungen
-                    NavigationDrawerItem(
-                        label = { Text("Einstellungen", color = TextWhite) },
-                        icon = { Icon(Icons.Default.Settings, null, tint = ThubNeonBlue) },
-                        selected = false,
-                        onClick = { onToggle() },
-                        modifier = Modifier.padding(horizontal = 8.dp),
-                        colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
-                    )
-
-                    Spacer(modifier = Modifier.weight(1f))
-
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        thickness = 1.dp,
-                        color = ThubNeonBlue.copy(alpha = 0.3f)
-                    )
-
-                    // Menü-Punkt: Logout
-                    NavigationDrawerItem(
-                        label = { Text("Abmelden", color = Color.Red) },
-                        icon = { Icon(Icons.AutoMirrored.Filled.Logout, null, tint = Color.Red) },
-                        selected = false,
-                        onClick = {
-                            onToggle()
-                            onLogoutClick()
-                        },
-                        modifier = Modifier.padding(horizontal = 8.dp),
-                        colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
-                    )
-                    Spacer(modifier = Modifier.height(24.dp))
-                }
+                // Logout unten
+                DrawerItem(
+                    icon = Icons.AutoMirrored.Filled.ExitToApp,
+                    label = "Abmelden",
+                    onClick = onLogoutClick,
+                    color = Color.Red
+                )
             }
         }
+    }
+}
+
+// --- HIER IST DIE FUNKTION, DIE GEFEHLT HAT ---
+@Composable
+fun DrawerItem(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    color: Color = TextWhite
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Text(
+            text = label,
+            color = color,
+            fontSize = 18.sp
+        )
     }
 }

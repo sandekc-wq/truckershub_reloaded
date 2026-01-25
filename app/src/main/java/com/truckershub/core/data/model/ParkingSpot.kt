@@ -1,6 +1,8 @@
 package com.truckershub.core.data.model
 
 import com.google.firebase.firestore.GeoPoint
+import com.google.firebase.firestore.ServerTimestamp
+import java.util.Date
 
 /**
  * PARKPLATZ DATENMODELL
@@ -32,7 +34,9 @@ data class ParkingSpot(
     val lastAmpelUpdate: Long = 0L,
     val ratings: ParkingRatings = ParkingRatings(),
     val address: String = "",
-    val country: String = "DE"
+    val country: String = "DE",
+    val description: String = "",
+    val reportedBy: String = ""
 )
 
 /**
@@ -59,7 +63,8 @@ enum class ParkingType {
     RASTSTAETTE,       // Autobahnraststätte
     INDUSTRIEGEBIET,   // Industriegebiet / Gewerbegebiet
     PARKPLATZ,         // Einfacher Parkplatz
-    PRIVAT             // Privater Stellplatz
+    PRIVAT,            // Privater Stellplatz
+    UNKNOWN            // Nicht Gelistet
 }
 
 /**

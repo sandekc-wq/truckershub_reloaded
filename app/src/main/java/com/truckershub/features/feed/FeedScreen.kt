@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddComment
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
@@ -25,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -43,27 +45,24 @@ import java.util.Locale
 fun FeedScreen(
     onPostClick: (Post) -> Unit,
     onFabClick: () -> Unit,
+    onCommentClick: (String) -> Unit, // <--- NEU: Wir geben die ID nach oben weiter
     viewModel: FeedViewModel = viewModel()
 ) {
     var showUploadDialog by remember { mutableStateOf(false) }
     val posts = viewModel.posts
-    val context = LocalContext.current // Den Context holen wir uns hier
+    val context = LocalContext.current
 
     val currentUserId = remember { FirebaseAuth.getInstance().currentUser?.uid ?: "" }
 
-    // --- HIER WAR DER FEHLER ---
     if (showUploadDialog) {
         AddPostDialog(
             onDismiss = { showUploadDialog = false },
-            // Jetzt nehmen wir Text UND Bild entgegen
             onSend = { text, imageUri ->
-                // Und geben ALLES (inklusive Context) an das ViewModel weiter
                 viewModel.createPost(context, text, imageUri) { success ->
                     if (success) {
                         showUploadDialog = false
                         Toast.makeText(context, "Gesendet! 🚛📸", Toast.LENGTH_SHORT).show()
                     } else {
-                        // Fehlermeldung, falls der Server zickt
                         Toast.makeText(context, "Upload Fehler! URL geprüft? ❌", Toast.LENGTH_LONG).show()
                     }
                 }
@@ -71,7 +70,6 @@ fun FeedScreen(
             isUploading = viewModel.isUploading
         )
     }
-    // ---------------------------
 
     Scaffold(
         floatingActionButton = {
@@ -116,7 +114,8 @@ fun FeedScreen(
                         post = post,
                         currentUserId = currentUserId,
                         onLikeClick = { viewModel.toggleLike(post) },
-                        onCommentClick = { Toast.makeText(context, "Kommentare kommen bald! 🚧", Toast.LENGTH_SHORT).show() },
+                        // HIER IST DIE ÄNDERUNG: Statt Toast rufen wir die Funktion auf
+                        onCommentClick = { onCommentClick(post.id) },
                         onShareClick = {
                             val sendIntent = Intent().apply {
                                 action = Intent.ACTION_SEND
@@ -125,6 +124,10 @@ fun FeedScreen(
                             }
                             val shareIntent = Intent.createChooser(sendIntent, null)
                             context.startActivity(shareIntent)
+                        },
+                        onDeleteClick = {
+                            viewModel.deletePost(post)
+                            Toast.makeText(context, "Post gelöscht 🗑️", Toast.LENGTH_SHORT).show()
                         }
                     )
                     Spacer(modifier = Modifier.height(16.dp))
@@ -140,7 +143,8 @@ fun PostItem(
     currentUserId: String,
     onLikeClick: () -> Unit,
     onCommentClick: () -> Unit,
-    onShareClick: () -> Unit
+    onShareClick: () -> Unit,
+    onDeleteClick: () -> Unit
 ) {
     val timeString = try {
         post.timestamp?.let {
@@ -149,6 +153,7 @@ fun PostItem(
     } catch (e: Exception) { "..." }
 
     val isLiked = post.likes.contains(currentUserId)
+    var showMenu by remember { mutableStateOf(false) }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = ThubDarkGray),
@@ -173,10 +178,42 @@ fun PostItem(
                     Text("um $timeString Uhr", color = Color.Gray, fontSize = 12.sp)
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                Icon(Icons.Default.MoreVert, null, tint = Color.Gray)
+
+                // MENÜ
+                Box {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(Icons.Default.MoreVert, null, tint = Color.Gray)
+                    }
+
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false },
+                        containerColor = ThubBlack,
+                        offset = DpOffset(x = (-10).dp, y = 0.dp)
+                    ) {
+                        if (post.userId == currentUserId) {
+                            DropdownMenuItem(
+                                text = { Text("Löschen", color = ThubRed) },
+                                onClick = {
+                                    showMenu = false
+                                    onDeleteClick()
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Delete, null, tint = ThubRed)
+                                }
+                            )
+                        } else {
+                            DropdownMenuItem(
+                                text = { Text("Melden", color = Color.Gray) },
+                                onClick = { showMenu = false },
+                                leadingIcon = { Icon(Icons.Default.Share, null, tint = Color.Gray) }
+                            )
+                        }
+                    }
+                }
             }
 
-            // BILD (Wichtig: Das kommt jetzt von deinem Server!)
+            // BILD
             if (post.imageUrl.isNotEmpty()) {
                 AsyncImage(
                     model = post.imageUrl,

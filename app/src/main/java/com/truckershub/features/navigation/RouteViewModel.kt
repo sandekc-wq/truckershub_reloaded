@@ -1,6 +1,7 @@
 package com.truckershub.features.navigation
 
 import android.app.Application
+import android.content.Context
 import android.location.Geocoder
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -11,7 +12,6 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.GeoPoint
 import com.truckershub.core.data.model.CountryInfo
 import com.truckershub.core.data.model.DefaultTruckProfiles
-import com.truckershub.core.data.model.PredefinedCountries // <--- WICHTIG: Importieren
 import com.truckershub.core.data.model.Route
 import com.truckershub.core.data.model.RouteDetails
 import com.truckershub.core.data.model.RouteInstruction
@@ -22,7 +22,10 @@ import com.truckershub.core.data.network.OrsClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.osmdroid.util.GeoPoint as OsmGeoPoint // Für den Decoder
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import org.osmdroid.util.GeoPoint as OsmGeoPoint
 import java.util.Locale
 
 class RouteViewModel(application: Application) : AndroidViewModel(application) {
@@ -31,242 +34,203 @@ class RouteViewModel(application: Application) : AndroidViewModel(application) {
     private val auth = FirebaseAuth.getInstance()
     private val context = application.applicationContext
 
-    // ==========================================
-    // ZUSTAND (STATE)
-    // ==========================================
+    // EINGABE FELDER
+    var startText by mutableStateOf("Aktueller Standort")
+    var destinationText by mutableStateOf("")
 
-    var startPoint by mutableStateOf("")
-    var destinationPoint by mutableStateOf("")
-    var waypoints by mutableStateOf<List<RoutePoint>>(emptyList())
-
-    var selectedTruckProfile by mutableStateOf<TruckProfile?>(
-        DefaultTruckProfiles.STANDARD_EU_TRUCK
-    )
-
+    // ROUTE & STATUS
     var currentRoute by mutableStateOf<Route?>(null)
     var isCalculating by mutableStateOf(false)
     var errorMessage by mutableStateOf<String?>(null)
 
-    var instructions by mutableStateOf<List<RouteInstruction>>(emptyList())
-        private set
+    var selectedTruckProfile by mutableStateOf<TruckProfile?>(DefaultTruckProfiles.STANDARD_EU_TRUCK)
 
-    // NEU: Das Gehirn für den BorderAlert 🧠🇪🇺
-    // Hier speichern wir, WO die Grenze ist und WELCHES Land kommt
+    // BORDER ALERT
     var borderLocation by mutableStateOf<GeoPoint?>(null)
     var nextBorderCountry by mutableStateOf<CountryInfo?>(null)
 
-    // ==========================================
-    // FUNKTIONEN
-    // ==========================================
+    fun updateStartPoint(text: String) { startText = text }
+    fun updateDestinationPoint(text: String) { destinationText = text }
 
-    fun updateStartPoint(point: String) { startPoint = point }
-    fun updateDestinationPoint(point: String) { destinationPoint = point }
+    // RESET
+    fun resetRoute() {
+        currentRoute = null
+        isCalculating = false
+        errorMessage = null
+        destinationText = ""
+        borderLocation = null
+        nextBorderCountry = null
+    }
 
-    fun calculateRoute() {
-        if (startPoint.isBlank() || destinationPoint.isBlank()) {
-            errorMessage = "Start und Ziel eingeben"
+    // BERECHNEN
+    fun calculateRoute(context: Context, currentLocation: GeoPoint?, onSuccess: () -> Unit) {
+        if (destinationText.isBlank()) {
+            errorMessage = "Bitte Ziel eingeben"
             return
         }
 
         isCalculating = true
         errorMessage = null
         currentRoute = null
-        // Reset Border-Info bei neuer Berechnung
         borderLocation = null
         nextBorderCountry = null
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
-                // 1. Geocoding
-                val startGeo = getGeoPointFromAddress(startPoint)
-                val destGeo = getGeoPointFromAddress(destinationPoint)
+                // 1. GEOCODING (Deutsch bevorzugt)
+                val startGeo = if (startText == "Aktueller Standort" || startText.isBlank()) {
+                    currentLocation
+                } else {
+                    getAddressLocation(startText)
+                }
+                val destGeo = getAddressLocation(destinationText)
 
                 if (startGeo == null || destGeo == null) {
-                    errorMessage = "Adresse nicht gefunden"
+                    errorMessage = "Adresse nicht gefunden. Tipp: 'Ort, Straße' eingeben."
                     isCalculating = false
                     return@launch
                 }
 
-                // 2. Profil prüfen
+                // 2. PROFIL
                 val profile = selectedTruckProfile ?: DefaultTruckProfiles.STANDARD_EU_TRUCK
                 val totalWeight = profile.truck.weight + profile.trailer.weight
 
-                // 3. Anfrage bauen
-                val request = RouteRequest(
-                    startPoint = startGeo,
-                    endPoint = destGeo,
-                    waypoints = emptyList(),
-                    vehicleHeight = profile.truck.height,
-                    vehicleWeight = totalWeight,
-                    vehicleWidth = profile.truck.width,
-                    hazmat = profile.hazmat,
-                    vehicle = "truck",
-                    profile = "driving-hgv"
-                )
+                // 3. API REQUEST (ORS/OSRM)
+                val routeUrl = "https://router.project-osrm.org/route/v1/driving/" +
+                        "${startGeo.longitude},${startGeo.latitude};" +
+                        "${destGeo.longitude},${destGeo.latitude}?overview=full&steps=true"
 
-                // 4. API Aufruf
-                val response = withContext(Dispatchers.IO) {
-                    routingClient.calculateRoute(request)
-                }
+                val client = OkHttpClient()
+                val request = Request.Builder().url(routeUrl).build()
+                val response = client.newCall(request).execute()
 
-                if (response != null && !response.paths.isNullOrEmpty()) {
-                    val path = response.paths[0]
-                    instructions = path.instructions ?: emptyList()
+                if (response.isSuccessful) {
+                    val json = response.body?.string() ?: ""
+                    val jsonObj = JSONObject(json)
 
-                    // NEU: Sofort nach Grenzen scannen! 🕵️‍♂️
-                    // Wir brauchen die decodierten Punkte, um die Koordinate zu finden
-                    val decodedGeoPoints = decodePolyline(path.points)
-                    checkForBorderCrossing(instructions, decodedGeoPoints)
+                    if (jsonObj.optString("code") == "Ok") {
+                        val routes = jsonObj.getJSONArray("routes")
+                        if (routes.length() > 0) {
+                            val routeJson = routes.getJSONObject(0)
 
-                    currentRoute = Route(
-                        id = "route_${System.currentTimeMillis()}",
-                        userId = auth.currentUser?.uid ?: "guest",
-                        name = "$startPoint → $destinationPoint",
-                        startPoint = RoutePoint(startPoint, startGeo, startPoint),
-                        endPoint = RoutePoint(destinationPoint, destGeo, destinationPoint),
-                        routeDetails = RouteDetails(
-                            distance = path.distance,
-                            duration = path.time,
-                            points = path.points,
-                            instructions = path.instructions ?: emptyList()
-                        ),
-                        truckProfile = profile,
-                        estimatedFuelCost = (path.distance / 1000) / 100 * 30.0 * 1.65,
-                        estimatedTollCost = 0.0
-                    )
+                            // Route Details
+                            val geometry = routeJson.getString("geometry")
+                            val duration = routeJson.getDouble("duration")
+                            val distance = routeJson.getDouble("distance")
+
+                            // ANWEISUNGEN PARSEN & ÜBERSETZEN 🇩🇪
+                            val instructionsList = mutableListOf<RouteInstruction>()
+                            val legs = routeJson.getJSONArray("legs")
+                            if (legs.length() > 0) {
+                                val steps = legs.getJSONObject(0).getJSONArray("steps")
+                                for (i in 0 until steps.length()) {
+                                    val step = steps.getJSONObject(i)
+
+                                    val maneuver = step.getJSONObject("maneuver")
+                                    val type = maneuver.optString("type")
+                                    val modifier = maneuver.optString("modifier")
+                                    val exit = maneuver.optInt("exit", 0)
+                                    val streetName = step.optString("name", "")
+
+                                    val germanText = getGermanInstruction(type, modifier, streetName, exit)
+
+                                    // HIER WAR DER FEHLER: 'duration' statt 'time' und Typen angepasst!
+                                    instructionsList.add(RouteInstruction(
+                                        text = germanText,
+                                        distance = step.getDouble("distance"),
+                                        duration = step.getDouble("duration"), // duration ist Double
+                                        type = 0 // Standard-Typ, falls benötigt
+                                    ))
+                                }
+                            }
+
+                            // Route bauen
+                            val newRoute = Route(
+                                id = "route_${System.currentTimeMillis()}",
+                                userId = auth.currentUser?.uid ?: "guest",
+                                name = "$startText → $destinationText",
+                                startPoint = RoutePoint(startText, startGeo, startText),
+                                endPoint = RoutePoint(destinationText, destGeo, destinationText),
+                                routeDetails = RouteDetails(
+                                    distance = distance,
+                                    duration = duration.toLong(), // HIER WAR DER FEHLER: Double zu Long konvertieren!
+                                    points = geometry,
+                                    instructions = instructionsList
+                                ),
+                                truckProfile = profile,
+                                estimatedFuelCost = 0.0,
+                                estimatedTollCost = 0.0
+                            )
+
+                            withContext(Dispatchers.Main) {
+                                currentRoute = newRoute
+                                isCalculating = false
+                                onSuccess()
+                            }
+                        }
+                    } else {
+                        throw Exception("Keine Route gefunden.")
+                    }
                 } else {
-                    errorMessage = "Keine Route gefunden (Prüfe API-Key / Limits)"
+                    throw Exception("Server-Fehler: ${response.code}")
                 }
 
             } catch (e: Exception) {
-                errorMessage = "Fehler: ${e.message}"
                 e.printStackTrace()
-            } finally {
-                isCalculating = false
+                withContext(Dispatchers.Main) {
+                    errorMessage = "Fehler: ${e.message}"
+                    isCalculating = false
+                }
             }
         }
     }
 
     /**
-     * DER GRENZ-SPÜRHUND 🐕
-     * Sucht in den Navigationsanweisungen nach "Enter Country"
+     * DER DOLMETSCHER 🇩🇪
      */
-    private fun checkForBorderCrossing(instrList: List<RouteInstruction>, points: List<OsmGeoPoint>) {
-        // Mapping: Welches Wort steht für welches Land? (Englisch & Deutsch)
-        val countryKeywords = mapOf(
-            "Austria" to "AT", "Österreich" to "AT",
-            "Germany" to "DE", "Deutschland" to "DE",
-            "Switzerland" to "CH", "Schweiz" to "CH",
-            "Poland" to "PL", "Polen" to "PL",
-            "Czech" to "CZ", "Tschechien" to "CZ",
-            "France" to "FR", "Frankreich" to "FR",
-            "Belgium" to "BE", "Belgien" to "BE",
-            "Netherlands" to "NL", "Niederlande" to "NL"
-        )
+    private fun getGermanInstruction(type: String, modifier: String, streetName: String, exit: Int): String {
+        val street = if (streetName.isNotBlank()) "auf $streetName" else ""
 
-        for (instr in instrList) {
-            val text = instr.text ?: continue
-
-            // Wir suchen im Text nach einem der Ländernamen
-            for ((keyword, code) in countryKeywords) {
-                if (text.contains(keyword, ignoreCase = true) && text.contains("Enter", ignoreCase = true) ||
-                    text.contains("Grenze", ignoreCase = true) && text.contains(keyword, ignoreCase = true)) {
-
-                    // TREFFER! Wir haben eine Grenze gefunden.
-                    val country = PredefinedCountries.getByCode(code)
-
-                    // Jetzt brauchen wir die Koordinate.
-                    // 'instr.index' sagt uns, der wievielte Punkt auf der Linie das ist.
-                    // (Wir prüfen sicherheitshalber die Bounds)
-                    val idx = instr.index
-                    if (country != null && idx >= 0 && idx < points.size) {
-                        val point = points[idx]
-
-                        // Wir speichern das Ergebnis im State
-                        nextBorderCountry = country
-                        borderLocation = GeoPoint(point.latitude, point.longitude)
-
-                        println("Border gefunden! 🚨 ${country.name} bei Index $idx")
-                        return // Wir nehmen nur die ERSTE Grenze auf der Route
-                    }
-                }
+        return when (type) {
+            "turn" -> when (modifier) {
+                "left" -> "Links abbiegen $street"
+                "right" -> "Rechts abbiegen $street"
+                "slight left" -> "Halb links halten $street"
+                "slight right" -> "Halb rechts halten $street"
+                "sharp left" -> "Scharf links abbiegen"
+                "sharp right" -> "Scharf rechts abbiegen"
+                "uturn" -> "Bitte wenden"
+                else -> "Abbiegen $street"
             }
-        }
-    }
-
-    // Hilfsfunktion: Adresse -> Koordinaten
-    private suspend fun getGeoPointFromAddress(address: String): GeoPoint? {
-        return withContext(Dispatchers.IO) {
-            try {
-                if (address.contains(",")) {
-                    val parts = address.split(",")
-                    if (parts.size == 2) {
-                        val latStr = parts[0].trim()
-                        val lonStr = parts[1].trim()
-                        if (latStr.matches(Regex("-?\\d+(\\.\\d+)?")) && lonStr.matches(Regex("-?\\d+(\\.\\d+)?"))) {
-                            return@withContext GeoPoint(latStr.toDouble(), lonStr.toDouble())
-                        }
-                    }
-                }
-                val geocoder = Geocoder(context, Locale.GERMANY)
-                @Suppress("DEPRECATION")
-                val results = geocoder.getFromLocationName(address, 1)
-                if (!results.isNullOrEmpty()) {
-                    GeoPoint(results[0].latitude, results[0].longitude)
-                } else {
-                    null
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                null
+            "new name" -> "Weiterfahren $street"
+            "depart" -> "Starten Sie Richtung $street"
+            "arrive" -> "Sie haben Ihr Ziel erreicht 🏁"
+            "merge" -> "Auffahren $street"
+            "on ramp" -> "Auf die Auffahrt $street"
+            "off ramp" -> "Ausfahrt nehmen $street"
+            "fork" -> when (modifier) {
+                "left" -> "Links halten $street"
+                "right" -> "Rechts halten $street"
+                else -> "Gabelung: $street"
             }
+            "end of road" -> when (modifier) {
+                "left" -> "Am Ende links"
+                "right" -> "Am Ende rechts"
+                else -> "Ende der Straße"
+            }
+            "roundabout" -> "Kreisverkehr: $exit. Ausfahrt nehmen"
+            "rotary" -> "Kreisverkehr: $exit. Ausfahrt nehmen"
+            "roundabout turn" -> "Im Kreisverkehr wenden"
+            "notification" -> "Hinweis: $street"
+            else -> if (streetName.isNotBlank()) "Weiter auf $streetName" else "Dem Straßenverlauf folgen"
         }
     }
 
-    // Polyline Decoder (jetzt direkt hier, damit wir die Punkte analysieren können)
-    private fun decodePolyline(encoded: String): List<OsmGeoPoint> {
-        val poly = ArrayList<OsmGeoPoint>()
-        var index = 0
-        val len = encoded.length
-        var lat = 0
-        var lng = 0
-        while (index < len) {
-            var b: Int
-            var shift = 0
-            var result = 0
-            do {
-                b = encoded[index++].code - 63
-                result = result or (b and 0x1f shl shift)
-                shift += 5
-            } while (b >= 0x20)
-            val dlat = if (result and 1 != 0) (result shr 1).inv() else result shr 1
-            lat += dlat
-            shift = 0
-            result = 0
-            do {
-                b = encoded[index++].code - 63
-                result = result or (b and 0x1f shl shift)
-                shift += 5
-            } while (b >= 0x20)
-            val dlng = if (result and 1 != 0) (result shr 1).inv() else result shr 1
-            lng += dlng
-            val p = OsmGeoPoint(lat / 1E5, lng / 1E5)
-            poly.add(p)
-        }
-        return poly
-    }
-
-    fun clearRoute() {
-        currentRoute = null
-        startPoint = ""
-        destinationPoint = ""
-        errorMessage = null
-        instructions = emptyList()
-        borderLocation = null
-        nextBorderCountry = null
-    }
-    // Einfach unten in RouteViewModel einfügen:
-    fun saveRoute() {
-        // TODO: Route speichern (Datenbank) kommt später
+    private fun getAddressLocation(address: String): GeoPoint? {
+        return try {
+            val geocoder = Geocoder(context, Locale.GERMANY)
+            val res = geocoder.getFromLocationName(address, 1)
+            if (!res.isNullOrEmpty()) GeoPoint(res[0].latitude, res[0].longitude) else null
+        } catch (e: Exception) { null }
     }
 }
