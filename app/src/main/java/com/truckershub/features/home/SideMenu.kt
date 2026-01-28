@@ -30,10 +30,11 @@ fun SideMenu(
     onChecklistClick: () -> Unit,
     onEUGuideClick: () -> Unit,
     onBuddiesClick: () -> Unit,
-    onTranslatorClick: () -> Unit
+    onTranslatorClick: () -> Unit,
+    onWikiClick: () -> Unit // <--- NEU: Der Stecker für das Wiki
 ) {
     if (isOpen) {
-        // Dunkler Schleier im Hintergrund, der das Menü schließt, wenn man daneben klickt
+        // Dunkler Schleier im Hintergrund
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -41,13 +42,13 @@ fun SideMenu(
                 .clickable { onToggle() }
         )
 
-        // Das eigentliche Menü (kommt von rechts oder links, hier einfach als Box)
+        // Das eigentliche Menü
         Box(
             modifier = Modifier
                 .fillMaxHeight()
                 .width(300.dp)
                 .background(ThubBlack)
-                .clickable(enabled = false) {} // Klicks im Menü sollen nicht durchgehen
+                .clickable(enabled = false) {}
         ) {
             Column(
                 modifier = Modifier
@@ -81,6 +82,13 @@ fun SideMenu(
                     onClick = onBuddiesClick
                 )
 
+                // --- NEU: FIRMEN WIKI ---
+                DrawerItem(
+                    icon = Icons.Default.Business, // Aktenkoffer Icon passt gut
+                    label = "Firmen-Wiki",
+                    onClick = onWikiClick
+                )
+
                 DrawerItem(
                     icon = Icons.Default.Translate,
                     label = "Dolmetscher",
@@ -101,7 +109,6 @@ fun SideMenu(
     }
 }
 
-// --- HIER IST DIE FUNKTION, DIE GEFEHLT HAT ---
 @Composable
 fun DrawerItem(
     icon: ImageVector,

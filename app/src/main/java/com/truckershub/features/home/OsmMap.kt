@@ -14,7 +14,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
-import android.location.Location
+import android.location.Location as AndroidLocation
 import android.location.LocationListener
 import android.location.LocationManager
 import android.net.Uri
@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddLocationAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Directions
+import androidx.compose.material.icons.filled.Map // Für Google Maps Icon
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
@@ -80,12 +81,17 @@ import com.truckershub.features.parking.components.ParkingMarkerHelper
 import com.truckershub.features.navigation.RouteViewModel
 import com.truckershub.features.navigation.components.RoutePlanningPanel
 import com.truckershub.features.navigation.components.BorderAlert
+import com.truckershub.features.map.SaveLocationDialog
+import com.truckershub.features.map.LocationViewModel
+import com.truckershub.core.data.model.Location
 import com.truckershub.features.map.AddLocationDialog
 import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
+import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint as OsmGeoPoint
 import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
@@ -109,7 +115,9 @@ fun OsmMap(
     firestore: FirebaseFirestore = FirebaseFirestore.getInstance(),
     auth: FirebaseAuth = FirebaseAuth.getInstance(),
     onOpenProfile: (String) -> Unit,
-    onOpenEUGuide: () -> Unit = {}
+    onOpenEUGuide: () -> Unit = {},
+    jumpToLocation: Location? = null,
+    onLocationJumped: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -120,12 +128,17 @@ fun OsmMap(
 
     val parkingViewModel: ParkingViewModel = viewModel()
     val routeViewModel: RouteViewModel = viewModel()
+    val locationViewModel: LocationViewModel = viewModel()
+    val savedLocations by locationViewModel.savedLocations.collectAsState()
 
     val parkingSpots = parkingViewModel.parkingSpots
     var showParkingDetail by remember { mutableStateOf(false) }
     var hasLoadedInitialParkingSpots by remember { mutableStateOf(false) }
 
-    var showAddDialog by remember { mutableStateOf(false) }
+    // DIALOG STEUERUNG
+    var showAddParkingDialog by remember { mutableStateOf(false) }
+    var showSaveLocationDialog by remember { mutableStateOf(false) }
+
     var clickedPoint by remember { mutableStateOf<OsmGeoPoint?>(null) }
     var myMapView by remember { mutableStateOf<MapView?>(null) }
 
@@ -133,6 +146,9 @@ fun OsmMap(
     val currentRoute = routeViewModel.currentRoute
     var isRoutePlanningVisible by remember { mutableStateOf(true) }
     var isRoutePlanningExpanded by remember { mutableStateOf(true) }
+
+    // NEU: Live-Entfernung zum Ziel
+    var liveDistanceToDest by remember { mutableStateOf<Int?>(null) }
 
     val borderLocation = routeViewModel.borderLocation
     val nextBorderCountry = routeViewModel.nextBorderCountry
@@ -213,18 +229,18 @@ fun OsmMap(
         }
     }
 
-    // --- LOCATION TRACKING & BORDER ALERT ---
+    // --- LOCATION TRACKING ---
     DisposableEffect(hasLocationPermission) {
         if (hasLocationPermission) {
             val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
             val locationListener = object : LocationListener {
-                override fun onLocationChanged(location: Location) {
+                override fun onLocationChanged(location: AndroidLocation) {
                     if (userId != null) {
                         firestore.collection("users").document(userId).update("currentLocation", GeoPoint(location.latitude, location.longitude))
                     }
                     if (borderLocation != null && nextBorderCountry != null) {
-                        val myLoc = Location("me").apply { latitude = location.latitude; longitude = location.longitude }
-                        val borderLoc = Location("border").apply { latitude = borderLocation.latitude; longitude = borderLocation.longitude }
+                        val myLoc = AndroidLocation("me").apply { latitude = location.latitude; longitude = location.longitude }
+                        val borderLoc = AndroidLocation("border").apply { latitude = borderLocation.latitude; longitude = borderLocation.longitude }
                         val distMeters = myLoc.distanceTo(borderLoc)
                         distanceToBorder = (distMeters / 1000).toInt()
                         showBorderAlert = distMeters < 10000
@@ -265,6 +281,18 @@ fun OsmMap(
                     this.overlays.add(locationOverlay)
                     myLocationOverlay = locationOverlay
 
+                    val mapEventsOverlay = MapEventsOverlay(object : MapEventsReceiver {
+                        override fun singleTapConfirmedHelper(p: OsmGeoPoint?): Boolean { return false }
+                        override fun longPressHelper(p: OsmGeoPoint?): Boolean {
+                            if (p != null) {
+                                clickedPoint = p
+                                showSaveLocationDialog = true
+                            }
+                            return true
+                        }
+                    })
+                    this.overlays.add(mapEventsOverlay)
+
                     if (isNightMode) {
                         val matrix = android.graphics.ColorMatrix()
                         matrix.setSaturation(0f)
@@ -279,20 +307,49 @@ fun OsmMap(
             update = { mapView ->
                 myMapView = mapView
 
-                if (hasLocationPermission && myLocationOverlay?.isMyLocationEnabled == false) {
-                    myLocationOverlay?.enableMyLocation()
-                    myLocationOverlay?.enableFollowLocation()
+                // --- AUTOPILOT ---
+                if (jumpToLocation != null) {
+                    myLocationOverlay?.disableFollowLocation() // Fessel lösen
+                    val target = OsmGeoPoint(jumpToLocation.latitude, jumpToLocation.longitude)
+                    mapView.controller.animateTo(target)
+                    mapView.controller.setZoom(18.5)
+
+                    // REPARATUR 1: Nur Name benutzen, da wir kein Adressfeld haben
+                    val destText = jumpToLocation.name
+                    routeViewModel.updateDestinationPoint(destText)
+
+                    if (routeViewModel.startText.isEmpty()) routeViewModel.updateStartPoint("Mein Standort")
+                    isRoutePlanningExpanded = true
+                    onLocationJumped()
                 }
 
-                // Marker aufräumen, aber Polyline nur löschen wenn Route weg ist
+                if (hasLocationPermission && myLocationOverlay?.isMyLocationEnabled == false) {
+                    myLocationOverlay?.enableMyLocation()
+                }
+
+                // --- LIVE ENTFERNUNG BERECHNEN ---
+                if (currentRoute != null && hasLocationPermission && myLocationOverlay?.myLocation != null) {
+                    val myLoc = myLocationOverlay!!.myLocation // Das ist ein OsmGeoPoint
+                    val routePoints = decodePolyline(currentRoute.routeDetails.points)
+
+                    if (routePoints.isNotEmpty()) {
+                        val destPoint = routePoints.last()
+
+                        // REPARATUR 2: distanceToAsDouble verwenden (Osmdroid zu Osmdroid)
+                        val distMeters = myLoc.distanceToAsDouble(destPoint)
+                        liveDistanceToDest = distMeters.toInt()
+                    }
+                }
+
+                // Marker aufräumen
                 mapView.overlays.removeIf {
                     it is Marker && it.id != "MY_LOC" && it.id != "ROUTE_START" && it.id != "ROUTE_END" && it.id != "TEMP_MARKER"
                 }
 
                 if (currentRoute == null) {
                     mapView.overlays.removeIf { it is Polyline }
+                    liveDistanceToDest = null // Reset
                 } else {
-                    // Falls Route da ist, prüfen ob schon gezeichnet
                     val hasPolyline = mapView.overlays.any { it is Polyline }
                     if (!hasPolyline) {
                         val encodedString = currentRoute.routeDetails.points
@@ -306,34 +363,31 @@ fun OsmMap(
                     }
                 }
 
-                // Parkplatz Marker aktualisieren (Mit neuen Icons)
-                ParkingMarkerHelper.updateParkingMarkers(
-                    mapView = mapView,
-                    parkings = parkingSpots,
-                    onParkingClick = { parking ->
-                        parkingViewModel.selectParking(parking.id)
-                        showParkingDetail = true
-                    }
-                )
-
+                // Marker Updates
+                ParkingMarkerHelper.updateParkingMarkers(mapView, parkingSpots) { p -> parkingViewModel.selectParking(p.id); showParkingDetail = true }
+                savedLocations.forEach { loc ->
+                    val marker = Marker(mapView)
+                    marker.id = "SAVED_LOC_${loc.id}"
+                    marker.position = OsmGeoPoint(loc.latitude, loc.longitude)
+                    marker.title = "${loc.name} (${loc.type})"
+                    marker.snippet = loc.description
+                    val star = ContextCompat.getDrawable(context, android.R.drawable.btn_star_big_on)
+                    star?.setTint(ThubNeonBlue.toArgb())
+                    marker.icon = star
+                    marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    marker.setOnMarkerClickListener { m, _ -> m.showInfoWindow(); true }
+                    mapView.overlays.add(marker)
+                }
                 otherTrucks.forEach { buddy ->
                     val marker = Marker(mapView)
                     marker.position = OsmGeoPoint(buddy.lat, buddy.lon)
                     marker.title = buddy.name
                     marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                    marker.setOnMarkerClickListener { _, _ ->
-                        selectedBuddy = buddy
-                        true
-                    }
-                    val rColor = when(buddy.status) {
-                        "Fahrbereit" -> Color.Green
-                        "Laden/Entl." -> Color(0xFFFFA500)
-                        "Pause" -> ThubNeonBlue
-                        else -> Color.Gray
-                    }
+                    marker.setOnMarkerClickListener { _, _ -> selectedBuddy = buddy; true }
+                    val rColor = when(buddy.status) { "Fahrbereit" -> Color.Green; "Pause" -> ThubNeonBlue; else -> Color.Gray }
                     coroutineScope.launch {
-                        val iconDrawable = getAvatarMarker(context, buddy.profileImageUrl, rColor)
-                        marker.icon = iconDrawable
+                        val ico = getAvatarMarker(context, buddy.profileImageUrl, rColor)
+                        marker.icon = ico
                         mapView.invalidate()
                     }
                     mapView.overlays.add(marker)
@@ -342,19 +396,12 @@ fun OsmMap(
             }
         )
 
-        // Fadenkreuz (nur wenn keine Route aktiv)
+        // Fadenkreuz
         if (currentRoute == null) {
-            Icon(
-                Icons.Filled.Add,
-                contentDescription = "Zielmitte",
-                tint = Color.Red.copy(alpha = 0.8f),
-                modifier = Modifier.align(Alignment.Center).size(48.dp)
-            )
+            Icon(Icons.Filled.Add, "Ziel", tint = Color.Red.copy(0.8f), modifier = Modifier.align(Alignment.Center).size(48.dp))
         }
 
-        // --- NAVIGATION UI ---
-
-        // 1. ROUTE PLANEN PANEL
+        // --- PANEL: ROUTEN PLANUNG ---
         if (isRoutePlanningVisible && currentRoute == null) {
             RoutePlanningPanel(
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
@@ -368,10 +415,7 @@ fun OsmMap(
                 onCalculateRoute = {
                     val currentLoc = myLocationOverlay?.myLocation?.let { GeoPoint(it.latitude, it.longitude) }
                     routeViewModel.calculateRoute(context, currentLoc) {
-                        // --- NAVI START ---
-                        Toast.makeText(context, "Route berechnet! Gute Fahrt! 🚛💨", Toast.LENGTH_SHORT).show()
                         isRoutePlanningExpanded = false
-
                         myLocationOverlay?.enableFollowLocation()
                         mapController?.setZoom(19.0)
                         mapController?.animateTo(myLocationOverlay?.myLocation)
@@ -382,262 +426,147 @@ fun OsmMap(
             )
         }
 
-        // 2. NAVI ANWEISUNG (DEUTSCH)
+        // --- PANEL: LIVE INFO WÄHREND DER FAHRT ---
         if (currentRoute != null) {
-            val firstInstruction = currentRoute.routeDetails.instructions.firstOrNull()?.text ?: "Route folgen"
-            val distance = currentRoute.routeDetails.instructions.firstOrNull()?.distance?.toInt() ?: 0
+            val rawDistance = liveDistanceToDest ?: currentRoute.routeDetails.instructions.firstOrNull()?.distance?.toInt() ?: 0
+            val formattedDistance = formatDistance(rawDistance)
 
             Card(
                 modifier = Modifier.align(Alignment.TopCenter).padding(16.dp).fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = ThubBlack.copy(alpha = 0.9f)),
-                shape = RoundedCornerShape(12.dp)
+                colors = CardDefaults.cardColors(containerColor = ThubBlack.copy(alpha = 0.95f)),
+                shape = RoundedCornerShape(12.dp),
+                elevation = CardDefaults.cardElevation(8.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Filled.Directions, null, tint = ThubNeonBlue, modifier = Modifier.size(32.dp))
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Column {
-                        Text(firstInstruction, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                        if(distance > 0) Text("in $distance Metern", color = Color.Gray)
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.Directions, null, tint = ThubNeonBlue, modifier = Modifier.size(32.dp))
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Entfernung zum Ziel:", color = Color.Gray, fontSize = 12.sp)
+                            Text(formattedDistance, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 24.sp)
+                        }
+
+                        // --- NAVI BUTTON ---
+                        Button(
+                            onClick = {
+                                val destPoints = decodePolyline(currentRoute.routeDetails.points)
+                                if (destPoints.isNotEmpty()) {
+                                    val dest = destPoints.last()
+                                    val uri = Uri.parse("google.navigation:q=${dest.latitude},${dest.longitude}&mode=d") // d = driving
+                                    val intent = Intent(Intent.ACTION_VIEW, uri)
+                                    intent.setPackage("com.google.android.apps.maps")
+                                    try {
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Google Maps nicht gefunden", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = ThubNeonBlue),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Filled.Map, contentDescription = null, tint = ThubBlack)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("NAVI", color = ThubBlack, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
         }
 
-        if (routeViewModel.isCalculating) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter), color = ThubNeonBlue)
-        }
-        if (routeViewModel.errorMessage != null) {
-            Text(
-                text = routeViewModel.errorMessage!!,
-                color = Color.Red,
-                modifier = Modifier.align(Alignment.Center).background(Color.Black).padding(8.dp)
-            )
-        }
+        if (routeViewModel.isCalculating) LinearProgressIndicator(modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter), color = ThubNeonBlue)
+        if (routeViewModel.errorMessage != null) Text(routeViewModel.errorMessage!!, color = Color.Red, modifier = Modifier.align(Alignment.Center).background(Color.Black).padding(8.dp))
 
-        // BORDER ALERT
         Box(modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp)) {
-            BorderAlert(
-                country = nextBorderCountry,
-                isVisible = showBorderAlert,
-                distanceKm = distanceToBorder,
-                onOpenInfo = { showBorderAlert = false; onOpenEUGuide() }
-            )
+            BorderAlert(nextBorderCountry, showBorderAlert, distanceToBorder) { showBorderAlert = false; onOpenEUGuide() }
         }
 
-        // BUTTONS UNTEN RECHTS
-        Column(
-            modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 16.dp, end = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // ROUTE ABBRECHEN BUTTON
+        // BUTTONS UNTEN
+        Column(modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 16.dp, end = 16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (currentRoute != null) {
-                FloatingActionButton(
-                    onClick = {
-                        routeViewModel.resetRoute()
-                        myMapView?.invalidate()
-                        Toast.makeText(context, "Route beendet", Toast.LENGTH_SHORT).show()
-                    },
-                    containerColor = Color.Red,
-                    contentColor = Color.White
-                ) {
-                    Icon(Icons.Filled.Close, "Route abbrechen")
-                }
+                FloatingActionButton(onClick = { routeViewModel.resetRoute(); myMapView?.invalidate(); liveDistanceToDest = null; Toast.makeText(context, "Route beendet", Toast.LENGTH_SHORT).show() }, containerColor = Color.Red, contentColor = Color.White) { Icon(Icons.Filled.Close, "Abbruch") }
                 Spacer(modifier = Modifier.height(8.dp))
             }
-
-            // ORT MELDEN
-            FloatingActionButton(
-                onClick = {
-                    val center = myMapView?.mapCenter
-                    if (center != null && center.latitude != 0.0) {
-                        clickedPoint = OsmGeoPoint(center.latitude, center.longitude)
-                        showAddDialog = true
-                    } else {
-                        Toast.makeText(context, "Karte wird noch geladen...", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                containerColor = if(currentRoute != null) ThubDarkGray else Color.Red,
-                contentColor = if(currentRoute != null) Color.Gray else Color.White
-            ) {
-                Icon(Icons.Filled.AddLocationAlt, "Ort melden")
-            }
-
-            // NAVI ZENTRIEREN
-            FloatingActionButton(
-                onClick = {
-                    if (hasLocationPermission) {
-                        myLocationOverlay?.enableFollowLocation()
-                        val loc = myLocationOverlay?.myLocation
-                        if (loc != null) {
-                            mapController?.animateTo(loc)
-                            val zoomLevel = if(currentRoute != null) 19.0 else 15.0
-                            mapController?.setZoom(zoomLevel)
-
-                            if(currentRoute == null) {
-                                parkingViewModel.loadParkingSpotsNearby(GeoPoint(loc.latitude, loc.longitude), 50.0)
-                            }
-                        } else {
-                            Toast.makeText(context, "Suche GPS...", Toast.LENGTH_SHORT).show()
-                        }
-                    } else {
-                        permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
-                    }
-                },
-                containerColor = ThubDarkGray,
-                contentColor = ThubNeonBlue
-            ) {
-                Icon(Icons.Filled.MyLocation, "Zentrieren")
-            }
+            FloatingActionButton(onClick = { val center = myMapView?.mapCenter; if (center != null && center.latitude != 0.0) { clickedPoint = OsmGeoPoint(center.latitude, center.longitude); showAddParkingDialog = true } }, containerColor = if(currentRoute != null) ThubDarkGray else Color.Red, contentColor = if(currentRoute != null) Color.Gray else Color.White) { Icon(Icons.Filled.AddLocationAlt, "Ort melden") }
+            FloatingActionButton(onClick = { if (hasLocationPermission) { myLocationOverlay?.enableFollowLocation(); val loc = myLocationOverlay?.myLocation; if (loc != null) { mapController?.animateTo(loc); mapController?.setZoom(if(currentRoute != null) 19.0 else 15.0); if(currentRoute == null) parkingViewModel.loadParkingSpotsNearby(GeoPoint(loc.latitude, loc.longitude), 50.0) } } else permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)) }, containerColor = ThubDarkGray, contentColor = ThubNeonBlue) { Icon(Icons.Filled.MyLocation, "Zentrieren") }
         }
 
-        // --- DIALOGE ---
-        if (showSosDialog) {
-            val myLoc = myLocationOverlay?.myLocation
-            val lat = myLoc?.latitude ?: 0.0
-            val lon = myLoc?.longitude ?: 0.0
-            EmergencyDialog(currentLat = lat, currentLon = lon, onDismiss = { showSosDialog = false })
-        }
+        if (showSosDialog) { val myLoc = myLocationOverlay?.myLocation; EmergencyDialog(myLoc?.latitude ?: 0.0, myLoc?.longitude ?: 0.0) { showSosDialog = false } }
 
         if (selectedBuddy != null) {
             val buddy = selectedBuddy!!
-            val isMe = buddy.uid == userId
             Dialog(onDismissRequest = { selectedBuddy = null }) {
-                Card(colors = CardDefaults.cardColors(containerColor = ThubBlack), shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth().border(2.dp, ThubNeonBlue, RoundedCornerShape(24.dp)).shadow(16.dp, RoundedCornerShape(24.dp), spotColor = ThubNeonBlue)) {
+                Card(colors = CardDefaults.cardColors(containerColor = ThubBlack), shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth().border(2.dp, ThubNeonBlue, RoundedCornerShape(24.dp))) {
                     Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { IconButton(onClick = { selectedBuddy = null }) { Icon(Icons.Filled.Close, contentDescription = "Schließen", tint = ThubNeonBlue) } }
-                        val statusColor = when(buddy.status) { "Fahrbereit" -> Color.Green; "Pause" -> ThubNeonBlue; else -> Color.Gray }
-                        AsyncImage(model = buddy.profileImageUrl.ifEmpty { R.drawable.thub_logo_bg }, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(120.dp).clip(CircleShape).border(4.dp, statusColor, CircleShape))
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(buddy.name, style = MaterialTheme.typography.headlineMedium, color = TextWhite, fontWeight = FontWeight.Black)
-                        Text(buddy.truckType, color = Color.Gray, fontSize = 14.sp)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Surface(color = statusColor.copy(alpha = 0.2f), shape = RoundedCornerShape(16.dp), border = androidx.compose.foundation.BorderStroke(1.dp, statusColor)) { Text(text = buddy.status, color = statusColor, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp), fontWeight = FontWeight.Bold, fontSize = 12.sp) }
-                        Spacer(modifier = Modifier.height(32.dp))
-                        if (!isMe) {
-                            ThubDialogButton(text = "Als Freund hinzufügen", icon = Icons.Filled.PersonAdd, onClick = { if (userId != null) { val request = hashMapOf("fromId" to userId, "toId" to buddy.uid, "status" to "pending", "timestamp" to FieldValue.serverTimestamp()); firestore.collection("friend_requests").add(request).addOnSuccessListener { Toast.makeText(context, "Anfrage raus! 📨", Toast.LENGTH_SHORT).show(); selectedBuddy = null } } else { Toast.makeText(context, "Bitte einloggen!", Toast.LENGTH_SHORT).show() } })
-                            Spacer(modifier = Modifier.height(16.dp))
-                        }
-                        ThubDialogButton(text = "Profil ansehen", icon = Icons.Filled.Person, isSecondary = true, onClick = { selectedBuddy = null; onOpenProfile(buddy.uid) })
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { IconButton(onClick = { selectedBuddy = null }) { Icon(Icons.Filled.Close, null, tint = ThubNeonBlue) } }
+                        AsyncImage(model = buddy.profileImageUrl.ifEmpty { R.drawable.thub_logo_bg }, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(120.dp).clip(CircleShape))
+                        Text(buddy.name, style = MaterialTheme.typography.headlineMedium, color = TextWhite)
+                        ThubDialogButton("Profil ansehen", Icons.Filled.Person, { selectedBuddy = null; onOpenProfile(buddy.uid) }, true)
                     }
                 }
             }
         }
 
-        // --- ABSTURZ-FIX: ADD LOCATION ---
-        if (showAddDialog && clickedPoint != null) {
-            AddLocationDialog(
-                lat = clickedPoint!!.latitude,
-                lng = clickedPoint!!.longitude,
-                onDismiss = { showAddDialog = false },
-                onSave = { locationData ->
-                    val pType = when(locationData.type) {
-                        "Parkplatz" -> ParkingType.PARKPLATZ
-                        "Raststätte" -> ParkingType.RASTSTAETTE
-                        "Autohof" -> ParkingType.AUTOHOF
-                        else -> ParkingType.UNKNOWN
-                    }
-                    val capInt = locationData.capacity.toIntOrNull() ?: 0
-                    val facilitiesList = mutableListOf<String>()
-                    if (locationData.hasShower) facilitiesList.add("Dusche")
-                    if (locationData.hasFood) facilitiesList.add("Essen")
-                    if (locationData.hasWifi) facilitiesList.add("WLAN")
+        if (showSaveLocationDialog && clickedPoint != null) { SaveLocationDialog(clickedPoint!!.latitude, clickedPoint!!.longitude, { showSaveLocationDialog = false }) { locationViewModel.saveLocation(it); showSaveLocationDialog = false } }
 
-                    val newParkingSpotData = hashMapOf(
-                        "name" to locationData.name,
-                        "type" to pType.name,
-                        "description" to locationData.description,
-                        "truckCapacity" to capInt,
-                        "isPaid" to locationData.isPaid,
-                        "facilities" to facilitiesList,
-                        "address" to locationData.address,
-                        "location" to GeoPoint(clickedPoint!!.latitude, clickedPoint!!.longitude),
-                        "reportedBy" to (auth.currentUser?.uid ?: "anonymous"),
-                        "lastAmpelUpdate" to System.currentTimeMillis(),
-                        "currentAmpel" to "UNKNOWN",
-                        "ratings" to hashMapOf("overall" to 0.0, "totalReviews" to 0)
+        // REPARATUR 3: Named Arguments für ParkingSpot, damit nichts verrutscht!
+        if (showAddParkingDialog && clickedPoint != null) {
+            AddLocationDialog(clickedPoint!!.latitude, clickedPoint!!.longitude, { showAddParkingDialog = false }) { locData ->
+                val pType = when(locData.type) { "Parkplatz" -> ParkingType.PARKPLATZ; "Raststätte" -> ParkingType.RASTSTAETTE; "Autohof" -> ParkingType.AUTOHOF; else -> ParkingType.UNKNOWN }
+                val capInt = locData.capacity.toIntOrNull() ?: 0
+                val facilitiesList = mutableListOf<String>(); if (locData.hasShower) facilitiesList.add("Dusche"); if (locData.hasFood) facilitiesList.add("Essen"); if (locData.hasWifi) facilitiesList.add("WLAN")
+
+                val firestoreGeo = GeoPoint(clickedPoint!!.latitude, clickedPoint!!.longitude)
+
+                val newParkingSpotData = hashMapOf(
+                    "name" to locData.name, "type" to pType.name, "description" to locData.description,
+                    "truckCapacity" to capInt, "isPaid" to locData.isPaid, "facilities" to facilitiesList,
+                    "address" to locData.address, "location" to firestoreGeo,
+                    "reportedBy" to (auth.currentUser?.uid ?: "anonymous"),
+                    "lastAmpelUpdate" to System.currentTimeMillis(),
+                    "currentAmpel" to "UNKNOWN", "ratings" to hashMapOf("overall" to 0.0, "totalReviews" to 0)
+                )
+
+                firestore.collection("parkingSpots").add(newParkingSpotData).addOnSuccessListener { doc ->
+                    showAddParkingDialog = false
+                    val newSpot = ParkingSpot(
+                        id = doc.id,
+                        name = locData.name,
+                        type = pType,
+                        description = locData.description,
+                        truckCapacity = capInt,
+                        isPaid = locData.isPaid,
+                        facilities = facilitiesList,
+                        address = locData.address,
+                        location = firestoreGeo,
+                        reportedBy = (auth.currentUser?.uid ?: "anonymous"),
+                        currentAmpel = AmpelStatus.UNKNOWN,
+                        ratings = ParkingRatings()
                     )
-
-                    firestore.collection("parkingSpots").add(newParkingSpotData).addOnSuccessListener { documentReference ->
-                        showAddDialog = false
-
-                        val newSpot = ParkingSpot(
-                            id = documentReference.id,
-                            name = locationData.name,
-                            type = pType,
-                            description = locationData.description,
-                            truckCapacity = capInt,
-                            isPaid = locationData.isPaid,
-                            facilities = facilitiesList,
-                            address = locationData.address,
-                            location = GeoPoint(clickedPoint!!.latitude, clickedPoint!!.longitude),
-                            reportedBy = (auth.currentUser?.uid ?: "anonymous"),
-                            currentAmpel = AmpelStatus.UNKNOWN,
-                            ratings = ParkingRatings()
-                        )
-
-                        // WICHTIG: Nur das ViewModel updaten! Kein manueller Map-Zugriff hier -> Kein Absturz.
-                        parkingViewModel.addTemporarySpot(newSpot)
-
-                        Toast.makeText(context, "Gespeichert & Bewertbar! 🌍✅", Toast.LENGTH_LONG).show()
-                    }
+                    parkingViewModel.addTemporarySpot(newSpot)
+                    Toast.makeText(context, "Gespeichert!", Toast.LENGTH_SHORT).show()
                 }
-            )
-        }
+            } }
 
         if (showParkingDetail && parkingViewModel.selectedParking != null) {
-            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)).padding(16.dp)) {
-                ParkingDetailScreen(
-                    parking = parkingViewModel.selectedParking!!,
-                    reviews = parkingViewModel.reviews,
-                    onBack = { showParkingDetail = false; parkingViewModel.clearSelection() },
-                    onReportStatus = { status, comment -> parkingViewModel.selectedParking?.let { parking -> parkingViewModel.reportAmpelStatus(parking.id, status, comment) } },
-                    onSubmitReview = { review -> parkingViewModel.submitReview(review) },
-                    onNavigate = { parkingViewModel.selectedParking?.let { parking -> val lat = parking.location.latitude; val lon = parking.location.longitude; val gmmIntentUri = Uri.parse("google.navigation:q=$lat,$lon&mode=d"); val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri); mapIntent.setPackage("com.google.android.apps.maps"); try { context.startActivity(mapIntent) } catch (e: Exception) { val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/maps/dir/?api=1&destination=$lat,$lon")); context.startActivity(browserIntent) } } }
-                )
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(0.8f)).padding(16.dp)) {
+                ParkingDetailScreen(parkingViewModel.selectedParking!!, parkingViewModel.reviews, { showParkingDetail = false; parkingViewModel.clearSelection() }, { s, c -> parkingViewModel.selectedParking?.let { parkingViewModel.reportAmpelStatus(it.id, s, c) } }, { parkingViewModel.submitReview(it) }, { parkingViewModel.selectedParking?.let { val i = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=${it.location.latitude},${it.location.longitude}&mode=d")); i.setPackage("com.google.android.apps.maps"); context.startActivity(i) } })
             }
         }
     }
 }
 
-// === HELFER FUNKTIONEN ===
-private fun decodePolyline(encoded: String): List<OsmGeoPoint> {
-    val poly = ArrayList<OsmGeoPoint>()
-    var index = 0
-    val len = encoded.length
-    var lat = 0
-    var lng = 0
-    while (index < len) {
-        var b: Int; var shift = 0; var result = 0
-        do { b = encoded[index++].code - 63; result = result or (b and 0x1f shl shift); shift += 5 } while (b >= 0x20)
-        val dlat = if (result and 1 != 0) (result shr 1).inv() else result shr 1; lat += dlat; shift = 0; result = 0
-        do { b = encoded[index++].code - 63; result = result or (b and 0x1f shl shift); shift += 5 } while (b >= 0x20)
-        val dlng = if (result and 1 != 0) (result shr 1).inv() else result shr 1; lng += dlng
-        val p = OsmGeoPoint(lat / 1E5, lng / 1E5); poly.add(p)
-    }
-    return poly
-}
-
-private suspend fun getAvatarMarker(context: Context, url: String, ringColor: Color): Drawable {
-    return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-        val loader = ImageLoader(context)
-        val request = ImageRequest.Builder(context).data(url.ifEmpty { R.drawable.thub_logo_bg }).allowHardware(false).build()
-        val result = loader.execute(request)
-        val rawBitmap = (result.drawable as? BitmapDrawable)?.bitmap ?: BitmapFactory.decodeResource(context.resources, R.drawable.thub_logo_bg)
-        val size = 120
-        val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(output)
-        val paint = Paint(); val rect = Rect(0, 0, size, size); val rectF = RectF(rect); paint.isAntiAlias = true
-        canvas.drawARGB(0, 0, 0, 0); paint.color = -0xbdbdbe; canvas.drawOval(rectF, paint); paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
-        val scaledBitmap = Bitmap.createScaledBitmap(rawBitmap, size, size, false); canvas.drawBitmap(scaledBitmap, rect, rect, paint); paint.xfermode = null; paint.style = Paint.Style.STROKE; paint.color = ringColor.toArgb(); paint.strokeWidth = 10f; canvas.drawOval(rectF, paint); BitmapDrawable(context.resources, output)
+// --- HELFER: METER IN KM UMRECHNEN ---
+fun formatDistance(meters: Int): String {
+    return if (meters >= 1000) {
+        val km = meters / 1000.0
+        String.format("%.1f km", km)
+    } else {
+        "$meters m"
     }
 }
 
-@Composable
-private fun ThubDialogButton(text: String, icon: ImageVector, onClick: () -> Unit, isSecondary: Boolean = false, modifier: Modifier = Modifier) {
-    val interactionSource = remember { MutableInteractionSource() }; val isPressed by interactionSource.collectIsPressedAsState(); val scale by animateFloatAsState(if (isPressed) 0.96f else 1f, label = "scale"); val baseColor = if (isSecondary) ThubDarkGray else ThubNeonBlue; val textColor = if (isSecondary) ThubNeonBlue else ThubBlack
-    Box(modifier = modifier.fillMaxWidth().height(50.dp).graphicsLayer { scaleX = scale; scaleY = scale }.clickable(interactionSource = interactionSource, indication = null, onClick = onClick).clip(RoundedCornerShape(12.dp)).background(baseColor).background(brush = Brush.verticalGradient(colors = if (isPressed) listOf(Color.White.copy(alpha = 0.3f), Color.Transparent) else listOf(Color.Transparent, Color.Transparent))).border(if (isSecondary) 1.dp else 0.dp, ThubNeonBlue, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) { Row(verticalAlignment = Alignment.CenterVertically) { Icon(icon, contentDescription = null, tint = textColor); Spacer(modifier = Modifier.width(12.dp)); Text(text, color = textColor, fontWeight = FontWeight.Bold, fontSize = 16.sp) } }
-}
+// Helper Polyline etc
+private fun decodePolyline(encoded: String): List<OsmGeoPoint> { val poly = ArrayList<OsmGeoPoint>(); var index = 0; val len = encoded.length; var lat = 0; var lng = 0; while (index < len) { var b: Int; var shift = 0; var result = 0; do { b = encoded[index++].code - 63; result = result or (b and 0x1f shl shift); shift += 5 } while (b >= 0x20); val dlat = if (result and 1 != 0) (result shr 1).inv() else result shr 1; lat += dlat; shift = 0; result = 0; do { b = encoded[index++].code - 63; result = result or (b and 0x1f shl shift); shift += 5 } while (b >= 0x20); val dlng = if (result and 1 != 0) (result shr 1).inv() else result shr 1; lng += dlng; val p = OsmGeoPoint(lat / 1E5, lng / 1E5); poly.add(p) }; return poly }
+private suspend fun getAvatarMarker(context: Context, url: String, ringColor: Color): Drawable { return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { val loader = ImageLoader(context); val request = ImageRequest.Builder(context).data(url.ifEmpty { R.drawable.thub_logo_bg }).allowHardware(false).build(); val result = loader.execute(request); val rawBitmap = (result.drawable as? BitmapDrawable)?.bitmap ?: BitmapFactory.decodeResource(context.resources, R.drawable.thub_logo_bg); val size = 120; val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888); val canvas = Canvas(output); val paint = Paint(); val rect = Rect(0, 0, size, size); val rectF = RectF(rect); paint.isAntiAlias = true; canvas.drawARGB(0, 0, 0, 0); paint.color = -0xbdbdbe; canvas.drawOval(rectF, paint); paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN); val scaledBitmap = Bitmap.createScaledBitmap(rawBitmap, size, size, false); canvas.drawBitmap(scaledBitmap, rect, rect, paint); paint.xfermode = null; paint.style = Paint.Style.STROKE; paint.color = ringColor.toArgb(); paint.strokeWidth = 10f; canvas.drawOval(rectF, paint); BitmapDrawable(context.resources, output) } }
+@Composable private fun ThubDialogButton(text: String, icon: ImageVector, onClick: () -> Unit, isSecondary: Boolean = false) { val interactionSource = remember { MutableInteractionSource() }; val isPressed by interactionSource.collectIsPressedAsState(); val scale by animateFloatAsState(if (isPressed) 0.96f else 1f); val baseColor = if (isSecondary) ThubDarkGray else ThubNeonBlue; val textColor = if (isSecondary) ThubNeonBlue else ThubBlack; Box(modifier = Modifier.fillMaxWidth().height(50.dp).graphicsLayer { scaleX = scale; scaleY = scale }.clickable(interactionSource = interactionSource, indication = null, onClick = onClick).clip(RoundedCornerShape(12.dp)).background(baseColor).border(if (isSecondary) 1.dp else 0.dp, ThubNeonBlue, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) { Row(verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = textColor); Spacer(modifier = Modifier.width(12.dp)); Text(text, color = textColor, fontWeight = FontWeight.Bold, fontSize = 16.sp) } } }

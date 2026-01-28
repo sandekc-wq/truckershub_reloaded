@@ -26,7 +26,10 @@ import com.truckershub.features.community.ChatScreen
 import com.truckershub.features.community.CommentScreen
 import com.truckershub.features.guide.EUGuideScreen
 import com.truckershub.features.feed.FeedScreen
+import com.truckershub.features.map.SavedLocationsScreen
 import com.truckershub.features.translator.TranslatorScreen
+import com.truckershub.core.data.model.Location
+import kotlinx.coroutines.launch
 
 @Suppress("DEPRECATION")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -35,6 +38,7 @@ fun HomeScreen(
     onLogoutClick: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     // TABS: 0=Map, 1=Feed, 2=Buddies, 3=Profil, 4=Checkliste
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -44,19 +48,30 @@ fun HomeScreen(
     var activeChatBuddy by remember { mutableStateOf<String?>(null) }
     var viewingCommentsForPostId by remember { mutableStateOf<String?>(null) }
 
+    // Overlay States
     var isMenuOpen by remember { mutableStateOf(false) }
     var showEUGuide by remember { mutableStateOf(false) }
     var showTranslator by remember { mutableStateOf(false) }
+    var showWiki by remember { mutableStateOf(false) } // <--- NEU: Wiki State
+
+    // State für den Ziel-Sprung (Autopilot für die Karte)
+    var jumpToLocation by remember { mutableStateOf<Location?>(null) }
 
     val isOnline by rememberOnlineStatus(context)
     val lastDataUpdate = remember { System.currentTimeMillis() }
 
     // --- ZENTRALER BACK-HANDLER ---
-    BackHandler(enabled = isMenuOpen || showEUGuide || showTranslator || viewingCommentsForPostId != null || viewingForeignUserId != null || activeChatBuddy != null || selectedTab != 0) {
+    // Hier regeln wir, was passiert, wenn man die "Zurück"-Taste am Handy drückt
+    BackHandler(
+        enabled = isMenuOpen || showEUGuide || showTranslator || showWiki ||
+                viewingCommentsForPostId != null || viewingForeignUserId != null ||
+                activeChatBuddy != null || selectedTab != 0
+    ) {
         when {
             isMenuOpen -> isMenuOpen = false
             showTranslator -> showTranslator = false
             showEUGuide -> showEUGuide = false
+            showWiki -> showWiki = false
             viewingCommentsForPostId != null -> viewingCommentsForPostId = null
             activeChatBuddy != null -> activeChatBuddy = null
             viewingForeignUserId != null -> {
@@ -70,12 +85,12 @@ fun HomeScreen(
     Scaffold(
         topBar = {
             // TopBar ausblenden, wenn Overlays offen sind
-            if (!showEUGuide && !showTranslator && viewingCommentsForPostId == null && activeChatBuddy == null) {
+            if (!showEUGuide && !showTranslator && !showWiki &&
+                viewingCommentsForPostId == null && activeChatBuddy == null
+            ) {
                 TopAppBar(
                     title = {
-                        // HIER IST DAS NEUE LOGO-DESIGN 👇
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            // 1. THUB (Neon & Fett)
                             Text(
                                 text = "THUB",
                                 color = ThubNeonBlue,
@@ -83,8 +98,6 @@ fun HomeScreen(
                                 fontSize = 22.sp
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-
-                            // 2. The Truckers Knife (Grau, klein & kursiv wie ein Kommentar)
                             Text(
                                 text = "The Truckers Knife",
                                 color = Color.Gray,
@@ -108,8 +121,10 @@ fun HomeScreen(
             }
         },
         bottomBar = {
-            // BottomBar ausblenden bei Overlays
-            if (selectedTab != 4 && !showEUGuide && !showTranslator && viewingCommentsForPostId == null && activeChatBuddy == null) {
+            // BottomBar ausblenden bei Overlays oder Checkliste
+            if (selectedTab != 4 && !showEUGuide && !showTranslator && !showWiki &&
+                viewingCommentsForPostId == null && activeChatBuddy == null
+            ) {
                 NavigationBar(containerColor = ThubBlack) {
                     NavigationBarItem(
                         selected = selectedTab == 0,
@@ -144,16 +159,25 @@ fun HomeScreen(
         },
         containerColor = ThubBlack
     ) { paddingValues ->
-        Box(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+        ) {
 
-            // HAUPT-INHALT
-            if (!showEUGuide && !showTranslator && viewingCommentsForPostId == null) {
+            // HAUPT-INHALT (Wird nur angezeigt, wenn kein Vollbild-Overlay aktiv ist)
+            if (!showEUGuide && !showTranslator && !showWiki && viewingCommentsForPostId == null) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     if (activeChatBuddy == null) {
                         OfflineWarningBanner(isVisible = !isOnline, lastUpdated = lastDataUpdate)
                     }
 
-                    Surface(modifier = Modifier.fillMaxSize().weight(1f), color = ThubBlack) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .weight(1f),
+                        color = ThubBlack
+                    ) {
                         when (selectedTab) {
                             0 -> OsmMap(
                                 modifier = Modifier.fillMaxSize(),
@@ -161,12 +185,17 @@ fun HomeScreen(
                                     viewingForeignUserId = targetId
                                     selectedTab = 3
                                 },
-                                onOpenEUGuide = { showEUGuide = true }
+                                onOpenEUGuide = { showEUGuide = true },
+                                // HIER ÜBERGEBEN WIR DAS ZIEL AN DIE KARTE 👇
+                                jumpToLocation = jumpToLocation,
+                                onLocationJumped = { jumpToLocation = null } // Reset nach Ankunft
                             )
 
                             1 -> FeedScreen(
                                 onPostClick = { },
-                                onFabClick = { Toast.makeText(context, "Upload...", Toast.LENGTH_SHORT).show() },
+                                onFabClick = {
+                                    Toast.makeText(context, "Upload...", Toast.LENGTH_SHORT).show()
+                                },
                                 onCommentClick = { postId -> viewingCommentsForPostId = postId }
                             )
 
@@ -205,7 +234,7 @@ fun HomeScreen(
                 }
             }
 
-            // --- OVERLAYS ---
+            // --- OVERLAYS (Legen sich über alles drüber) ---
 
             if (viewingCommentsForPostId != null) {
                 Surface(modifier = Modifier.fillMaxSize(), color = ThubBlack) {
@@ -228,6 +257,27 @@ fun HomeScreen(
                 }
             }
 
+            // WIKI OVERLAY (Unser neues Feature)
+            if (showWiki) {
+                Surface(modifier = Modifier.fillMaxSize(), color = ThubBlack) {
+                    SavedLocationsScreen(
+                        onClose = { showWiki = false },
+                        onJumpToLocation = { location ->
+                            // HIER SETZEN WIR DAS ZIEL 👇
+                            showWiki = false
+                            selectedTab = 0 // Sicherstellen, dass wir auf der Karte sind
+                            jumpToLocation = location // Abflug! ✈️
+                            Toast.makeText(
+                                context,
+                                "Fliege zu: ${location.name} 🛫",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    )
+                }
+            }
+
+            // SIDE MENU
             SideMenu(
                 isOpen = isMenuOpen,
                 onToggle = { isMenuOpen = !isMenuOpen },
@@ -237,23 +287,33 @@ fun HomeScreen(
                     selectedTab = 4
                     showEUGuide = false
                     showTranslator = false
+                    showWiki = false
                 },
                 onEUGuideClick = {
                     isMenuOpen = false
                     showEUGuide = true
                     showTranslator = false
+                    showWiki = false
                 },
                 onBuddiesClick = {
                     isMenuOpen = false
                     selectedTab = 2
                     showEUGuide = false
                     showTranslator = false
+                    showWiki = false
                     viewingForeignUserId = null
                 },
                 onTranslatorClick = {
                     isMenuOpen = false
                     showTranslator = true
                     showEUGuide = false
+                    showWiki = false
+                },
+                onWikiClick = {
+                    isMenuOpen = false
+                    showWiki = true
+                    showEUGuide = false
+                    showTranslator = false
                 }
             )
         }

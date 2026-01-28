@@ -4,26 +4,34 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters // <--- WICHTIG: Import für Converters
+import com.truckershub.core.data.model.Location // <--- WICHTIG: Import für Location
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
  * TRUCKERSHUB DATABASE (Room)
  *
- * Die Room Database für Offline-Cache
- * Aktuell nur Parkplätze, kann später erweitert werden für andere Daten
+ * Die Room Database für Offline-Cache und lokale Daten.
+ * Enthält: Parkplätze (Cache) und Eigene Orte (Favoriten/Wiki).
  */
 @Database(
-    entities = [ParkingSpotEntity::class],
-    version = 1,
+    entities = [ParkingSpotEntity::class, Location::class], // <--- Location HINZUGEFÜGT
+    version = 2, // <--- VERSION AUF 2 ERHÖHT
     exportSchema = false
 )
+@TypeConverters(Converters::class) // <--- CONVERTERS AKTIVIERT (für LocationType & Datum)
 abstract class TruckersHubDatabase : RoomDatabase() {
 
     /**
      * DAO für Parkplätze
      */
     abstract fun parkingSpotDao(): ParkingSpotDao
+
+    /**
+     * DAO für Eigene Orte / Firmen-Wiki
+     */
+    abstract fun locationDao(): LocationDao // <--- NEUES DAO HINZUGEFÜGT
 
     companion object {
         // Singleton Pattern
@@ -45,7 +53,7 @@ abstract class TruckersHubDatabase : RoomDatabase() {
                     TruckersHubDatabase::class.java,
                     "truckershub_database"
                 )
-                    // Fallback wenn Migration fehlt (in Entwicklung OK, aber besser für Prod)
+                    // Fallback wenn Migration fehlt (löscht Daten bei Versions-Wechsel -> OK für Dev)
                     .fallbackToDestructiveMigration()
                     // Callback für Initialisierung
                     .addCallback(DatabaseCallback(scope))
@@ -57,7 +65,6 @@ abstract class TruckersHubDatabase : RoomDatabase() {
 
         /**
          * Callback für Datenbank-Initialisierung
-         * Hier können wir Beispieldaten einfügen
          */
         private class DatabaseCallback(
             private val scope: CoroutineScope
@@ -66,17 +73,7 @@ abstract class TruckersHubDatabase : RoomDatabase() {
                 super.onCreate(db)
                 scope.launch {
                     // Hier können Beispieldaten eingefügt werden
-                    // aktuell leer - Daten kommen von Firebase
-                    // Populate logic if needed
                 }
-            }
-
-            /**
-             * Datenbank vorbefüllen (optional)
-             */
-            suspend fun populateDatabase(dao: ParkingSpotDao) {
-                // Beispiel-Daten können hier eingefügt werden
-                // Wird aktuell nicht verwendet - Daten kommen von Firebase
             }
         }
     }
@@ -90,7 +87,7 @@ abstract class TruckersHubDatabase : RoomDatabase() {
 object DatabaseHelper {
 
     /**
-     * Prüft ob Daten Datenbank leer ist
+     * Prüft ob Daten Datenbank leer ist (bezogen auf Parkplätze)
      */
     suspend fun isEmpty(database: TruckersHubDatabase): Boolean {
         return database.parkingSpotDao().getCount() == 0
@@ -115,7 +112,7 @@ object DatabaseHelper {
      */
     fun estimateCacheSize(database: TruckersHubDatabase): Long {
         // Einfache Schätzung: Anzahl Einträge × ca. 500 Bytes
-        return 0L // Wird später besser implementiert
+        return 0L
     }
 
     /**
